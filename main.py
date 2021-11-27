@@ -7,25 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Dict, Any
 
+from statement_parser import Transaction, parse_csv
+
 BLACKLISTED_TRANSACTION_DESCRIPTIONS = ("AUTOMATIC PAYMENT - THANK", )
-
-
-@dataclass
-class Transaction:
-    date: str
-    description: str
-    category: str
-    type: str
-    amount: float
-
-    def short_description(self) -> str:
-        return f"{self.description} ({self.amount})"
-
-
-def parse(file_path: Path) -> List[Dict[Any, Any]]:
-    with file_path.open("r") as f:
-        reader = csv.DictReader(f, delimiter=',')
-        return list(reader)
 
 
 def sum_transactions(transactions: List[Transaction]) -> int:
@@ -59,13 +43,8 @@ def print_transactions_by_category(transactions: List[Transaction]):
 def calculate_stats(transactions: List[Dict[Any, Any]]) -> None:
     # Remove all blacklisted transactions
     transactions = [
-        Transaction(date=transaction["Transaction Date"],
-                    description=transaction["Description"],
-                    category=transaction["Category"],
-                    type=transaction["Type"],
-                    amount=float(transaction["Amount"]))
-        for transaction in transactions
-        if not any(k in transaction["Description"]
+        transaction for transaction in transactions
+        if not any(k in transaction.description
                    for k in BLACKLISTED_TRANSACTION_DESCRIPTIONS)
     ]
 
@@ -80,10 +59,13 @@ def calculate_stats(transactions: List[Dict[Any, Any]]) -> None:
 #       cache already calculated files if it becomes slow
 @click.command()
 def main() -> None:
-    for path, _, files in os.walk("data"):
+    for path, directory, files in os.walk("data"):
+        if path == os.path.join("data", "all"):
+            continue
         for file in files:
-            transactions = parse(Path(path) / file)
-            calculate_stats(transactions)
+            if Path(file).suffix == ".CSV":
+                transactions = parse_csv(Path(path) / file)
+                calculate_stats(transactions)
 
 
 if __name__ == "__main__":
