@@ -1,41 +1,20 @@
 from pathlib import Path
-from enum import Enum, auto
-from typing import Optional
+from typing import Optional, Mapping, List
 
-from ruamel.yaml import YAML, yaml_object
+import nltk
+from nltk.tag.perceptron import PerceptronTagger
+from ruamel.yaml import YAML
+
+from category import Category
 
 yaml = YAML()
 
 
-@yaml_object(yaml)
-class Category(Enum):
-    Automotive = auto()
-    BillsUtilities = auto()
-    Education = auto()
-    Entertainment = auto()
-    FeesAdjustments = auto()
-    Food = auto()
-    Gas = auto()
-    Gifts = auto()
-    Groceries = auto()
-    Health = auto()
-    Home = auto()
-    Miscellaneous = auto()
-    Personal = auto()
-    ProfessionalServices = auto()
-    Shopping = auto()
-    Travel = auto()
+CategoryMap = Mapping[str, Category]
 
-    @classmethod
-    def to_yaml(cls, representer, node):
-        return representer.represent_scalar("!Category", node.name)
-
-    @classmethod
-    def from_yaml(cls, constructor, node):
-        return cls(Category[node.value])
-
-
-STRING_CATEGORY_MAP = {
+CATEGORY_LOOKUP_TABLE_PATH = Path("./data/category_lookup_table.yaml")
+CATEGORY_HINT_CONFIG_PATH = Path("./data/category_hint_config.yaml")
+STRING_CATEGORY_MAP: CategoryMap = {
     "Automotive": Category.Automotive,
     "Bills & Utilities": Category.BillsUtilities,
     "Education": Category.Education,
@@ -55,30 +34,155 @@ STRING_CATEGORY_MAP = {
 }
 
 
-# @TODO: Add hints
-class CategoryLookupTable:
-    def __init__(self, path: Path) -> None:
-        if not path.exists():
-            with path.open("w"):
+class CategoryHinter:
+    """
+    Maintains a config of keywords to category mapping.
+    These categories can be learned either directly from a bank history or manually by the user.
+    """
+
+    def __init__(self, config_path: Path = CATEGORY_HINT_CONFIG_PATH) -> None:
+        """Initializes the config.
+        Params:
+            config_path: The path to the config file that this class maintains.
+        """
+        self._config_path = config_path
+
+        if not config_path.exists():
+            with config_path.open("w"):
                 pass
-        self._path = path
-        self._table = yaml.load(path)
-        if not self._table:
-            self._table = {}
+
+        self._config = yaml.load(config_path)
+        if not self._config:
+            self._config = {}
 
     def __enter__(self) -> "CategoryLookupTable":
+        """Enter context."""
         return self
 
-    def __exit__(self, *args) -> None:
+    def __exit__(self, *_args) -> None:
+        """Exit context; flush contents to file."""
         self.flush()
 
     def flush(self) -> None:
         """Flushes the table to file."""
-        yaml.dump(self._table, self._path)
+        yaml.dump(self._config, self._config_path)
+
+    def _split_description(self, description: str) -> List[str]:
+        """Tokenizes the description and strips non alphanumeric characters/whitespaces."""
+        description = "".join(
+            c if str.isalnum(c) or str.isspace(c) or c == "&" else " "
+            for c in description
+        )
+
+        def is_valid_word(s: str) -> bool:
+            return (
+                len(s) > 0 and all(str.isalnum(c) or c == "&" for c in s) and s != "&"
+            )
+
+        return list(filter(is_valid_word, description.split(" ")))
+
+    def hint(self, description: str) -> Optional[CategoryMap]:
+        """
+        Scans the words in the description to determine if there are any key words that are in the config.
+        If there are, return the categories mapped to each key word found.
+        """
+        category_map: CategoryMap = {}
+        for word in self._split_description(description):
+            if word in self._config:
+                category_map[word] = self._config[word]
+        return category_map
+
+    def store(self, key: str, category: Category) -> None:
+        """Stores a key to category mapping in the table."""
+        if " " in key:
+            raise RuntimeError(f"{key} can not contain whitespaces, it must be 1 word")
+        self._config[key] = category
+
+    def build_hints(
+        self, description_category_map: CategoryMap, do_flush: bool
+    ) -> None:
+        """
+        Builds a category map of individual words from the input category map of descriptions.
+        Params:
+            description_category_map : A map of descriptions to categories.
+            do_flush                 : True to write to file, false to print results.
+        """
+        # Ensure the necessary databases are downloaded
+        nltk.download("punkt", quiet=True)
+        nltk.download("averaged_perceptron_tagger", quiet=True)
+
+        # The part of speech tagger instance
+        tagger = PerceptronTagger()
+
+        def criteria(word: str) -> bool:
+            """
+            Each word must meet this criteria to be eligible for hinting.
+                1. The word must not be a single letter.
+                2. The word must be a noun.
+            """
+            tag = tagger.tag([word])[0][1]
+            # https://stackoverflow.com/questions/15388831/what-are-all-possible-pos-tags-of-nltk/15389153
+            return len(word) > 1 and tag.startswith("NN")
+
+        hints: CategoryMap = {}
+        for description, category in description_category_map.items():
+            for word in self._split_description(description):
+                if criteria(word):
+                    hints[word] = category
+
+        n: int = 0
+        for word, category in hints.items():
+            if word not in self._config:
+                n += 1
+        print(f"{n} new hints discovered")
+
+        # Merge the current set of hints with the new set
+        self._config |= hints
+        print(f"{len(self._config)} total hints")
+
+        if not do_flush:
+            print(self._config)
+            return
+
+        # Write to file
+        yaml.dump(self._config, self._config_path)
+
+
+class CategoryLookupTable:
+    """
+    Builds and maintains a table of keywords to category mapping.
+    """
+
+    def __init__(self, config_path: Path = CATEGORY_LOOKUP_TABLE_PATH) -> None:
+        """Initializes the config.
+        Params:
+            config_path: The path to the config file that this class maintains.
+        """
+        self._config_path = config_path
+
+        if not config_path.exists():
+            with config_path.open("w"):
+                pass
+
+        self._table: CategoryMap = yaml.load(config_path)
+        if not self._table:
+            self._table = {}
+
+    def __enter__(self) -> "CategoryLookupTable":
+        """Enter context."""
+        return self
+
+    def __exit__(self, *_args) -> None:
+        """Exit context; flush contents to file."""
+        self.flush()
+
+    def flush(self) -> None:
+        """Flushes the table to file."""
+        yaml.dump(self._table, self._config_path)
 
     def load(self, key: str) -> Optional[Category]:
         """Looks up the string in the table."""
-        return self._table[key]
+        return self._table.get(key)
 
     def store(self, key: str, category: Category) -> None:
         """Stores a key to category mapping in the table."""
