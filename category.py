@@ -1,3 +1,4 @@
+import sqlite3
 from enum import Enum, auto
 
 from ruamel.yaml import YAML, yaml_object
@@ -32,3 +33,7 @@ class Category(Enum):
     @classmethod
     def from_yaml(cls, constructor, node):
         return cls(Category[node.value])
+
+# Register [Category] with sqlite serialization/deserialization
+sqlite3.register_adapter(Category, lambda category: category.name)
+sqlite3.register_converter("Category", lambda s: Category[s.decode()])
