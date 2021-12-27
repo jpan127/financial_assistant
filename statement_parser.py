@@ -1,5 +1,4 @@
 import csv
-import dataclasses
 from datetime import timezone
 from typing import List
 from pathlib import Path
@@ -9,24 +8,7 @@ from ofxtools.Parser import OFXTree
 
 from category import Category
 from category_lookup_table import STRING_CATEGORY_MAP
-
-
-@dataclasses.dataclass
-class Transaction:
-    date: str
-    description: str
-    category: Category
-    amount: float
-    id: str             # Some unique identifier
-
-    def short_description(self) -> str:
-        return f"{self.description} ({self.amount})"
-
-    @staticmethod
-    def unique_field() -> str:
-        # Make sure this field exists
-        assert any(f.name == "id" for f in dataclasses.fields(Transaction))
-        return "id"
+from transaction import Transaction
 
 
 # These are chase payment transaction descriptions and shouldn't be relevant

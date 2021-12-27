@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Type, Mapping, Optional
 
 from category import Category
-from statement_parser import Transaction
+from transaction import Transaction
 
 TYPE_MAP: Mapping[Type, str] = {
     str: "TINYTEXT",

@@ -5,7 +5,7 @@ import pytest
 
 import database
 from category import Category
-from statement_parser import Transaction
+from transaction import Transaction
 
 
 # Transactions used in the tests below

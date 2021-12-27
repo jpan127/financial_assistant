@@ -9,7 +9,8 @@ from ofxclient.config import OfxConfig
 
 from category import Category
 from category_lookup_table import CategoryLookupTable, CategoryHinter
-from statement_parser import Transaction, parse
+from transaction import Transaction
+from statement_parser import parse
 
 
 def _prompt_user_for_category(

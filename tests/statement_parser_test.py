@@ -1,7 +1,8 @@
 from pathlib import Path
 
 from category import Category
-from statement_parser import parse, Transaction
+from statement_parser import parse
+from transaction import Transaction
 
 
 def test_parse() -> None:
