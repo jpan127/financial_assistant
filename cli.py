@@ -4,10 +4,11 @@ import sqlite3
 from itertools import permutations
 from pathlib import Path
 from textwrap import dedent
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import click
 
+import config
 import database
 from category import Category
 from category_lookup_table import (
@@ -20,17 +21,42 @@ from statement_parser import parse
 from statement_puller import determine_transaction_categories
 
 
+# @TODO: Make paths agnostic to caller
 DATABASE_PATH = Path("./data/database.db")
 DATABASE_BACKUP_PATH = Path("./data/database_backup.db")
 
 
 class CLI(cmd.Cmd):
+    """The application's main CLI."""
+
     intro = "Hi, I am your financial assistant! What would you like to do today?"
     prompt = "> "
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, config_path: Path, **kwargs) -> None:
         self._args = kwargs
+        self._config = config.load(config_path)
         super().__init__()
+
+        def parse_user_decorator(f):
+            def g(arg: str):
+                user, args = self._parse_user(arg)
+                if not user:
+                    return
+                f(user, args)
+
+            return g
+
+        # Decorate methods that require a user arg
+        methods_that_require_user = ("do_update_database", "do_update_categories", "do_tag")
+        for method in methods_that_require_user:
+            setattr(self, method, parse_user_decorator(getattr(self, method)))
+            setattr(self, f"complete_{method.replace('do_', '')}", self._complete_user)
+
+        attributes = dir(self)
+        for method in attributes:
+            if method.startswith("do_") and method not in ("do_exit", "do_help"):
+                if f"help_{method.replace('do_', '')}" not in attributes:
+                    raise NotImplementedError(f"Missing help method for {method}")
 
     def help_update_database(self) -> None:
         """Help text for [do_update_database]."""
@@ -40,6 +66,10 @@ class CLI(cmd.Cmd):
             Provide an OFX file that contains bank transactions.
             These transactions will be parsed and stored into the database.
             Keep in mind that OFX transactions do not specify categories so they will need to be populated subsequently.
+
+            Args:
+                1: The user, must be one of the specified users in the config file.
+                2: The path to the OFX file.
             """
             )
         )
@@ -54,6 +84,9 @@ class CLI(cmd.Cmd):
             and populate any now-known categories.  This program will prompt the user for
             any remaining transactions with unknown categories.  The result will be saved,
             and the program will learn from it.
+
+            Args:
+                1: The user, must be one of the specified users in the config file.
             """
             )
         )
@@ -110,9 +143,11 @@ class CLI(cmd.Cmd):
             dedent(
                 """\
             Applies a tag to the transactions found in the database with matching descriptions.
+
             Args:
-                1: A valid SQL match pattern (i.e. %KEYWORD%).
-                2: A single alphanumeric tag keyword."""
+                1: The user, must be one of the specified users in the config file.
+                2: A valid SQL match pattern (i.e. %KEYWORD%).
+                3: A single alphanumeric tag keyword."""
             )
         )
 
@@ -136,20 +171,32 @@ class CLI(cmd.Cmd):
             return None
         return check_extension(path)
 
-    def do_update_database(self, arg: str):
+    def _parse_user(self, arg: str) -> Optional[Tuple[str, List[str]]]:
+        args = arg.split(" ")
+        if not args:
+            print("First arg must be the user")
+            return None, []
+        user = args[0]
+        if user not in self._config.users:
+            print(f"'{user}' is not a valid user ({self._config.users})")
+            return None, []
+        return user, args[1:]
+
+    def do_update_database(self, user: str, args: List[str]):
         """Refer to [help_update_database] for documentation."""
-        if path := self._determine_path(arg, expected_extensions=[".ofx"]):
+        maybe_path: Optional[str] = args[0] if args else None
+        if path := self._determine_path(maybe_path, expected_extensions=[".ofx"]):
             print(f"Updating database with : {path}")
             transactions = parse(path)
-            with database.session(db=database.write(path=DATABASE_PATH, transactions=transactions)) as db:
-                db.close()
+            with database.session(db=database.write(user, path=DATABASE_PATH, transactions=transactions)):
+                pass
 
-    def do_update_categories(self, _: str):
+    def do_update_categories(self, user: str, _: List[str]):
         """Refer to [help_update_categories] for documentation."""
-        unknown_transactions = database.read_unknown_categories(path=DATABASE_PATH)
+        unknown_transactions = database.read_unknown_categories(user, path=DATABASE_PATH)
         print(f"Found {len(unknown_transactions)} transactions with unknown categories")
         determine_transaction_categories(unknown_transactions)
-        database.write(path=DATABASE_PATH, transactions=unknown_transactions, do_overwrite=True)
+        database.write(user, path=DATABASE_PATH, transactions=unknown_transactions, do_overwrite=True)
         print(f"Populated {len(unknown_transactions)} transactions with categories")
 
     def do_import_categories(self, arg: str):
@@ -159,7 +206,7 @@ class CLI(cmd.Cmd):
             with CategoryLookupTable(config_path=CATEGORY_LOOKUP_TABLE_PATH) as table:
                 transactions = parse(path)
                 print(f"Found {len(transactions)} transactions")
-                for transaction in transactions:
+                for transaction in transactions:  # pylint: disable=not-an-iterable
                     if transaction.category != Category.Unknown:
                         table.store(transaction.description, transaction.category)
 
@@ -190,20 +237,20 @@ class CLI(cmd.Cmd):
                     print(f"Removed in backup ({n}):" if a == "main" else f"Added in backup ({n}):")
                     pprint.pprint(results, width=150)  # TODO: Make a config for this
 
-    def do_tag(self, arg: str) -> None:
+    def do_tag(self, user: str, args: List[str]):
         """Refer to [help_tag] for documentation."""
         try:
-            format_str, tag = arg.split(" ")
+            format_str, tag = args[0], args[1]
             if not tag.isalnum():
                 print("Expecting tag to be alphanumeric")
                 return
-        except ValueError:
+        except IndexError:
             print("Expecting arguments {format_str tag}")
             return
 
         try:
             with database.session(DATABASE_PATH) as db:
-                database.tag(db, format_str=format_str, tag_str=tag)
+                database.tag(db, user, format_str=format_str, tag_str=tag)
         except sqlite3.OperationalError as e:
             print("Caught sqlite3.OperationalError:", e)
 
@@ -211,15 +258,28 @@ class CLI(cmd.Cmd):
         """Exit the program."""
         return True
 
+    def _complete_user(self, text, line, *_) -> List[str]:
+        """Tab completion for commands where the first argument must be the user.
+
+        Refer to the [cmd] documentation for the args.
+        """
+        # Once the first word is completed, don't auto complete anymore
+        if line.count(" ") > 1:
+            return []
+        # Return all users that match the prefix
+        return [user for user in self._config.users if user.startswith(text)] if text else self._config.users
+
 
 @click.command()
 @click.option("-p", "--path", type=click.Path(exists=True))
-def cli(path: str) -> None:
+@click.option("-c", "--config_path", type=click.Path(exists=True), default="./data/config.yaml")
+def cli(path: str, config_path: str) -> None:
+    """The CLI entrypoint."""
     kwargs = {}
     if path:
         kwargs["path"] = Path(path)
-    CLI(**kwargs).cmdloop()
+    CLI(config_path=Path(config_path), **kwargs).cmdloop()
 
 
 if __name__ == "__main__":
-    cli()
+    cli()  # pylint: disable=no-value-for-parameter

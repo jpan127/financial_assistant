@@ -7,7 +7,7 @@ from ruamel.yaml import YAML
 
 from category import Category
 
-yaml = YAML()
+yaml = YAML(typ="safe")
 
 
 CategoryMap = Mapping[str, Category]

@@ -3,7 +3,7 @@ from enum import Enum, auto
 
 from ruamel.yaml import YAML, yaml_object
 
-yaml = YAML()
+yaml = YAML(typ="safe")
 
 
 @yaml_object(yaml)

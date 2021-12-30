@@ -34,7 +34,7 @@ def _parse_ofx(path: Path) -> List[Transaction]:
     with path.open("rb") as f:
         parser.parse(f)
 
-    transactions = []
+    transactions: List[Transaction] = []
     ofx = parser.convert()
     statements = ofx.statements
     for statement in statements:
@@ -107,4 +107,4 @@ def cli(path: str) -> None:
     pprint.pprint(parse(Path(path)))
 
 if __name__ == "__main__":
-    cli()
+    cli()  # pylint: disable=no-value-for-parameter

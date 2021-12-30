@@ -46,14 +46,16 @@ TRANSACTIONS = [
     ),
 ]
 
+USER: str = "PyTest"
+
 
 def check(db: sqlite3.Connection, transactions: List[Transaction]) -> None:
-    assert database.to_transactions(db.execute("select * from transactions")) == transactions
+    assert database.to_transactions(db.execute(f"select * from {USER}")) == transactions
 
 
 def test_session() -> None:
     """Tests the [session] function."""
-    write = lambda db: database.write(db=db, transactions=TRANSACTIONS)
+    write = lambda db: database.write(USER, db=db, transactions=TRANSACTIONS)
 
     # Normal usages
     with database.session(":memory:") as db:
@@ -87,12 +89,14 @@ def test_write() -> None:
     def write_another_transaction(**kwargs) -> None:
         """Writes a transaction to the database supplied by kwargs."""
         database.write(
+            USER,
             **kwargs,
             transactions=[TRANSACTIONS[3]],
         )
 
     # Create a database with 3 transactions
     db = database.write(
+        USER,
         path=":memory:",
         transactions=TRANSACTIONS[:3],
     )
@@ -100,46 +104,43 @@ def test_write() -> None:
     # What rows we expect the database to have
     expected_transactions: List[Transaction] = []
 
-    # Check the database rows against the expected rows
-    def test() -> None:
-        assert database.to_transactions(db.execute("select * from transactions")) == expected_transactions
-
     # After the first write, there should be 3 rows for 3 transactions
     expected_transactions = TRANSACTIONS[:3]
-    test()
+    check(db, expected_transactions)
 
     # Write a 4th transaction, but to a new database, not reusing the initial database
     # Nothing changes with the current database
     write_another_transaction(path=":memory:")
-    test()
+    check(db, expected_transactions)
 
     # Write a 4th transaction to the initial database
     # Expect another row
     write_another_transaction(db=db)
     expected_transactions = TRANSACTIONS[:4]
-    test()
+    check(db, expected_transactions)
 
     # Write the same 4th transaction again and expect it does not get duplicatedf
     write_another_transaction(db=db)
-    test()
+    check(db, expected_transactions)
 
 
 def test_read_unknown_categories() -> None:
     """Tests the [read_unknown_categories] function."""
     # These paths do not exist yet
     with pytest.raises(RuntimeError):
-        database.read_unknown_categories(path=Path(":memory:"))
+        database.read_unknown_categories(USER, path=Path(":memory:"))
     with pytest.raises(RuntimeError):
-        database.read_unknown_categories(path=Path("nonexistent_database.db"))
+        database.read_unknown_categories(USER, path=Path("nonexistent_database.db"))
 
     # Write multiple known categorized transaction, and one unknown
     db = database.write(
+        USER,
         path=Path(":memory:"),
         transactions=TRANSACTIONS,
     )
 
     # Function under test should only return the unknown
-    assert database.read_unknown_categories(db=db) == [TRANSACTIONS[3]]
+    assert database.read_unknown_categories(USER, db=db) == [TRANSACTIONS[3]]
 
 
 def test_tag(monkeypatch: Any) -> None:
@@ -166,29 +167,30 @@ def test_tag(monkeypatch: Any) -> None:
 
     with database.session(Path(":memory:")) as db:
         database.write(
+            USER,
             db=db,
             transactions=transactions,
         )
 
         # No matches
-        database.tag(db, format_str="", tag_str="food")
-        assert database.to_transactions(db.execute("select * from transactions")) == transactions
+        database.tag(db, USER, format_str="", tag_str="food")
+        check(db, transactions)
 
         # 3 matches (rejected)
         response = "n"
-        database.tag(db, format_str="%DOORDASH%", tag_str="food")
-        assert database.to_transactions(db.execute("select * from transactions")) == transactions
+        database.tag(db, USER, format_str="%DOORDASH%", tag_str="food")
+        check(db, transactions)
 
         # 3 matches (accepted)
         # expected_transactions[0] should not duplicate the food tag
         response = "y"
-        database.tag(db, format_str="%DOORDASH%", tag_str="food")
+        database.tag(db, USER, format_str="%DOORDASH%", tag_str="food")
         expected_transactions[-1].tags.append("food")
         expected_transactions[-2].tags.append("food")
-        assert database.to_transactions(db.execute("select * from transactions")) == expected_transactions
+        check(db, expected_transactions)
 
         # 2 matches (accepted)
-        database.tag(db, format_str="DOORDASH%", tag_str="stupid")
+        database.tag(db, USER, format_str="DOORDASH%", tag_str="stupid")
         expected_transactions[0].tags.append("stupid")
         expected_transactions[-1].tags.append("stupid")
-        assert database.to_transactions(db.execute("select * from transactions")) == expected_transactions
+        check(db, expected_transactions)
