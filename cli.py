@@ -1,4 +1,7 @@
 import cmd
+import pprint
+import sqlite3
+from itertools import permutations
 from pathlib import Path
 from textwrap import dedent
 from typing import List, Optional
@@ -18,6 +21,7 @@ from statement_puller import determine_transaction_categories
 
 
 DATABASE_PATH = Path("./data/database.db")
+DATABASE_BACKUP_PATH = Path("./data/database_backup.db")
 
 
 class CLI(cmd.Cmd):
@@ -78,9 +82,41 @@ class CLI(cmd.Cmd):
             )
         )
 
-    def _determine_path(
-        self, arg: str, expected_extensions: List[str]
-    ) -> Optional[Path]:
+    def help_exec(self) -> None:
+        """Help text for [do_exec]."""
+        print(
+            dedent(
+                """\
+            Executes an arbitrary command with the database.
+            Args:
+                1: A valid SQL command."""
+            )
+        )
+
+    def help_exec_to_backup(self) -> None:
+        """Help text for [do_exec_to_backup]."""
+        print(
+            dedent(
+                """\
+            Executes an arbitrary command with a copy of the database and prints the differences.
+            Args:
+                1: A valid SQL command."""
+            )
+        )
+
+    def help_tag(self) -> None:
+        """Help text for [do_tag]."""
+        print(
+            dedent(
+                """\
+            Applies a tag to the transactions found in the database with matching descriptions.
+            Args:
+                1: A valid SQL match pattern (i.e. %KEYWORD%).
+                2: A single alphanumeric tag keyword."""
+            )
+        )
+
+    def _determine_path(self, arg: str, expected_extensions: List[str]) -> Optional[Path]:
         def check_extension(path: Path) -> Optional[Path]:
             if any(path.suffix.lower() == ext.lower() for ext in expected_extensions):
                 return path
@@ -105,17 +141,15 @@ class CLI(cmd.Cmd):
         if path := self._determine_path(arg, expected_extensions=[".ofx"]):
             print(f"Updating database with : {path}")
             transactions = parse(path)
-            db = database.write(path=DATABASE_PATH, transactions=transactions)
-            db.close()
+            with database.session(db=database.write(path=DATABASE_PATH, transactions=transactions)) as db:
+                db.close()
 
     def do_update_categories(self, _: str):
         """Refer to [help_update_categories] for documentation."""
         unknown_transactions = database.read_unknown_categories(path=DATABASE_PATH)
         print(f"Found {len(unknown_transactions)} transactions with unknown categories")
         determine_transaction_categories(unknown_transactions)
-        database.write(
-            path=DATABASE_PATH, transactions=unknown_transactions, do_overwrite=True
-        )
+        database.write(path=DATABASE_PATH, transactions=unknown_transactions, do_overwrite=True)
         print(f"Populated {len(unknown_transactions)} transactions with categories")
 
     def do_import_categories(self, arg: str):
@@ -131,6 +165,47 @@ class CLI(cmd.Cmd):
 
                 hinter = CategoryHinter(config_path=CATEGORY_HINT_CONFIG_PATH)
                 hinter.build_hints(table._table, do_flush=True)
+
+    def do_exec(self, arg: str) -> None:
+        """Refer to [help_exec] for documentation."""
+        with database.session(DATABASE_PATH) as db:
+            with db:
+                db.execute(arg)
+
+    def do_exec_to_backup(self, arg: str) -> None:
+        """Refer to [help_exec_to_backup] for documentation."""
+        with database.session(DATABASE_PATH, read_only=True) as db, database.session(DATABASE_BACKUP_PATH) as db_backup:
+            # Copy to backup database, then execute the command on the backup database
+            with db_backup:
+                db.backup(db_backup)
+                db_backup.execute(arg)
+            with db:
+                # Attach the databases to each other so the queries can compare them
+                db.execute("attach ? as backup", [str(DATABASE_BACKUP_PATH)])
+                # Try the different permutations with n=2 (vice versa)
+                for a, b in permutations(("main", "backup")):
+                    # Determine what is in [a] but not [b]
+                    results = database.to_transactions(db.execute(f"select * from (select * from {a}.transactions except select * from {b}.transactions)"))
+                    n = len(results)
+                    print(f"Removed in backup ({n}):" if a == "main" else f"Added in backup ({n}):")
+                    pprint.pprint(results, width=150)  # TODO: Make a config for this
+
+    def do_tag(self, arg: str) -> None:
+        """Refer to [help_tag] for documentation."""
+        try:
+            format_str, tag = arg.split(" ")
+            if not tag.isalnum():
+                print("Expecting tag to be alphanumeric")
+                return
+        except ValueError:
+            print("Expecting arguments {format_str tag}")
+            return
+
+        try:
+            with database.session(DATABASE_PATH) as db:
+                database.tag(db, format_str=format_str, tag_str=tag)
+        except sqlite3.OperationalError as e:
+            print("Caught sqlite3.OperationalError:", e)
 
     def do_exit(self, _: str) -> bool:
         """Exit the program."""

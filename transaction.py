@@ -1,4 +1,5 @@
 import dataclasses
+from typing import List
 
 from category import Category
 
@@ -9,7 +10,8 @@ class Transaction:
     description: str
     category: Category
     amount: float
-    id: str  # Some unique identifier
+    id: str = dataclasses.field(repr=False)  # Some unique identifier
+    tags: List[str] = dataclasses.field(default_factory=list)
 
     def short_description(self) -> str:
         return f"{self.description} ({self.amount})"

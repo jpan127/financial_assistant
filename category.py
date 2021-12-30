@@ -34,6 +34,11 @@ class Category(Enum):
     def from_yaml(cls, constructor, node):
         return cls(Category[node.value])
 
+    def __repr__(self):
+        """Much cleaner than the generated repr: '<Category.XYZ: 1>'."""
+        return self.name
+
+
 # Register [Category] with sqlite serialization/deserialization
 sqlite3.register_adapter(Category, lambda category: category.name)
 sqlite3.register_converter("Category", lambda s: Category[s.decode()])

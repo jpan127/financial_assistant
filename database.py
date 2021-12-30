@@ -1,5 +1,8 @@
-import sqlite3
 import dataclasses
+import re
+import pprint
+import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Type, Mapping, Optional
 
@@ -10,12 +13,11 @@ TYPE_MAP: Mapping[Type, str] = {
     str: "TINYTEXT",
     float: "FLOAT",
     Category: "Category",
+    List[str]: "StringList",
 }
 TRANSACTION_SCHEMA = {f.name: TYPE_MAP[f.type] for f in dataclasses.fields(Transaction)}
 PRIMARY_KEY = Transaction.unique_field()
-COLUMN_NAMES = ",".join(
-    TRANSACTION_SCHEMA.keys()
-)  # .replace("category", "category Category")
+COLUMN_NAMES = ",".join(TRANSACTION_SCHEMA.keys())
 COLUMN_HEADERS = ", ".join(
     f"{name} {type}" for name, type in TRANSACTION_SCHEMA.items()
 ).replace(
@@ -23,6 +25,30 @@ COLUMN_HEADERS = ", ".join(
     f"{PRIMARY_KEY} {TRANSACTION_SCHEMA[PRIMARY_KEY]} primary key",
 )
 VALUES_FORMAT_STRING = ",".join(["?"] * len(TRANSACTION_SCHEMA))
+
+# Register [list[str]] with sqlite serialization/deserialization
+sqlite3.register_adapter(list, lambda l: ",".join(l))
+sqlite3.register_converter("StringList", lambda s: s.decode().split(","))
+
+
+@contextmanager
+def session(*args, read_only: bool = False, **kwargs) -> sqlite3.Connection:
+    """Creates a session with the [detect_types] arg set."""
+    if "db" in kwargs:
+        db = kwargs.get("db")
+    else:
+        if len(args) != 1:
+            raise ValueError(f"Expecting one positional argument (path) if 'db' is not in kwargs: {args}")
+        path: Path = args[0]
+        if read_only:
+            path = Path(f"file:{path}?mode=ro")
+            kwargs["uri"] = True
+        db = sqlite3.connect(path, **kwargs, detect_types=sqlite3.PARSE_DECLTYPES)
+
+    # Connect a regex function to python's implementation
+    db.create_function("regexp", 2, lambda expression, s: re.compile(expression).search(s) is not None)
+    yield db
+    db.close()
 
 
 def write(
@@ -118,6 +144,47 @@ def to_transactions(cursor: sqlite3.Cursor) -> List[Transaction]:
             category=values[2],
             amount=values[3],
             id=values[4],
+            tags=values[5] or [], # Use empty list over None
         )
         for values in cursor
     ]
+
+
+def tag(db: sqlite3.Connection, *, format_str: str, tag_str: str, width=150) -> None:
+    """Populates matched transactions' tag column.
+
+    Args:
+        db         : An externally created database connection.
+        format_str : A SQL search format string (i.e. %ABC% to match *ABC*).
+        tag_str    : An alphanumeric tag to add to the tag column.
+        width      : The width to print matched transactions.
+    """
+    if not tag_str.isalnum():
+        raise ValueError(f"Expecting tag ({tag_str}) to be alphanumeric")
+
+    # Match the description first, then match rows that do not already have this tag
+    match_clause: str = f"description like '{format_str}' and tags not regexp '\\b{tag_str}\\b'"
+    with db:
+        # Preview the rows that are matched
+        matches = to_transactions(db.execute(f"select * from transactions where {match_clause}"))
+        if not matches:
+            print("No matches")
+            return
+        # TODO: Make a config for this
+        pprint.pprint(matches, width=width)
+
+        # Make sure the user is ok with the previewed changes
+        while True:
+            match input("Would you like to continue (y/n)?").lower():
+                case 'y': break
+                case 'n': return
+
+        # Update the database
+        # Append the tag, with a comma, if there already exists tags, otherwise just set the entire string
+        db.execute(f"""update transactions
+                    set tags = iif(
+                        tags = '' or tags is null,
+                        '{tag_str}',
+                        tags || ',{tag_str}')
+                    where {match_clause}
+                    """)
