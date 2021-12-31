@@ -13,9 +13,7 @@ from transaction import Transaction
 from statement_parser import parse
 
 
-def _prompt_user_for_category(
-    hinter: CategoryHinter, table: CategoryLookupTable, description: str
-) -> Category:
+def _prompt_user_for_category(hinter: CategoryHinter, table: CategoryLookupTable, description: str, description_suffix: str) -> Category:
     """
     Prompts the user so the user can decide what category this transaction belongs in.
     The user can either:
@@ -27,9 +25,10 @@ def _prompt_user_for_category(
            The description to category mapping will be saved in the lookup table
 
     Params:
-        hinter      : Produces hints for the potential categories based on the description.
-        table       : Lookup table to store the category for the description.
-        description : The transaction's description.
+        hinter             : Produces hints for the potential categories based on the description.
+        table              : Lookup table to store the category for the description.
+        description        : The transaction's description.
+        description_suffix : A suffix to append to the description.
     Returns:
         The category if chosen.
     """
@@ -48,11 +47,9 @@ def _prompt_user_for_category(
     # Format the options
     # Add enumerations for each option
     format_word = lambda word: f"({word})" if word else ""
-    option_strs = [
-        f"({i}) {c.name} {format_word(word)}" for i, (c, word) in enumerate(options)
-    ]
+    option_strs = [f"({i}) {c.name} {format_word(word)}" for i, (c, word) in enumerate(options)]
     option_lines = "\n".join(option_strs)
-    options_str = f"\nDescription: {description}\nChoose which category best fits the description.\n{option_lines}\n"
+    options_str = f"\nDescription: {description} {description_suffix}\nChoose which category best fits the description.\n{option_lines}\n"
 
     # Prompt the user for which category this transaction belongs in
     # Keep prompting until successful
@@ -73,24 +70,28 @@ def _prompt_user_for_category(
             pass
 
 
-def determine_transaction_categories(transactions: List[Transaction]) -> None:
+def determine_transaction_categories(transactions: List[Transaction], do_prompt: bool) -> List[Transaction]:
     """
     Determines the categories for all unknown categories.
 
-    Params:
+    Args:
         transactions : All the transactions to determine categories for.
+        do_prompt    : True to prompt the user for which category is best.
+    Returns:
+        The modified transactions.
     """
     with CategoryLookupTable() as table, CategoryHinter() as hinter:
-        for transaction in transactions:
+        for i, transaction in enumerate(transactions):
             # Try to load from the lookup table first
             if category := table.load(transaction.description):
-                transaction.category = category
+                transactions[i].category = category
                 continue
 
             # Otherwise prompt the user for what the category should be
-            transaction.category = _prompt_user_for_category(
-                hinter, table, transaction.description
-            )
+            if do_prompt:
+                transactions[i].category = _prompt_user_for_category(hinter, table, transaction.description, description_suffix=f"({i} / {len(transactions)})")
+
+    return transactions
 
 
 def _download(account: Account) -> Path:
@@ -123,17 +124,14 @@ def pull(username: str, account_name: str) -> List[Transaction]:
     config = OfxConfig()
     accounts = list(
         filter(
-            lambda a: (a.institution.username == username)
-            and (a.description == account_name),
+            lambda a: (a.institution.username == username) and (a.description == account_name),
             config.accounts(),
         )
     )
     if not accounts:
         raise KeyError(f"Did not find the {account_name} account under user {username}")
     if len(accounts) > 1:
-        raise RuntimeError(
-            f"Found {len(accounts)} accounts for {account_name} under user {username}"
-        )
+        raise RuntimeError(f"Found {len(accounts)} accounts for {account_name} under user {username}")
 
     # Try to download as much as possible, but Chase for example only returns 30 days
     account = accounts[0]

@@ -114,8 +114,12 @@ def read_unknown_categories(user: str, *, path: Optional[Path] = None, db: Optio
             raise RuntimeError(f"{path} is expected to exist")
         db = sqlite3.connect(path, detect_types=sqlite3.PARSE_DECLTYPES)
 
-    transactions = to_transactions(db.execute(f"select * from {user} where category = ?", (Category.Unknown.name,)))
-    db.close()
+    try:
+        transactions = to_transactions(db.execute(f"select * from {user} where category = ?", (Category.Unknown.name,)))
+    finally:
+        # If locally opened, close it
+        if path:
+            db.close()
     return transactions
 
 

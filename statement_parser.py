@@ -1,6 +1,6 @@
 import csv
 from datetime import timezone
-from typing import List
+from typing import Any, List, Mapping
 from pathlib import Path
 
 import click
@@ -13,10 +13,20 @@ from transaction import Transaction
 
 # These are chase payment transaction descriptions and shouldn't be relevant
 IGNORED_TRANSACTION_KEYS = (
+    "AUTO PAYMENT",
     "AUTOMATIC PAYMENT - THANK",
-    "Payment Thank You-Mobile",
+    "AUTOMATIC PAYMENT - THANK",
+    "AUTOPAY PAYMENT - THANK YOU",
+    "AUTOPAY PAYMENT THANK YOU",
+    "MOBILE PAYMENT THANK YOU",
+    "MOBILE PAYMENT - THANK YOU",
     "Payment Thank You - Web",
+    "Payment Thank You-Mobile",
 )
+
+
+class SchemaMismatchError(Exception):
+    """The schema of the file was unexpected."""
 
 
 def _parse_ofx(path: Path) -> List[Transaction]:
@@ -29,6 +39,11 @@ def _parse_ofx(path: Path) -> List[Transaction]:
     Returns:
         The converted list of transactions.
     """
+
+    def parse_id(transaction: Any) -> str:
+        """Prefer the REFNUM attribute, if it exists, otherwise the FITID."""
+        return transaction.refnum or transaction.fitid
+
     # Parse in binary mode (required by library)
     parser = OFXTree()
     with path.open("rb") as f:
@@ -40,18 +55,17 @@ def _parse_ofx(path: Path) -> List[Transaction]:
     for statement in statements:
         for transaction in statement.transactions:
             # Skip blacklisted transactions
-            if transaction.name in IGNORED_TRANSACTION_KEYS:
+            # Some of these strings have leading whitespace
+            if transaction.name.strip() in IGNORED_TRANSACTION_KEYS:
                 continue
-            dtime = transaction.dtposted.replace(tzinfo=timezone.utc).astimezone(
-                tz=None
-            )
+            dtime = transaction.dtposted.replace(tzinfo=timezone.utc).astimezone(tz=None)
             transactions.append(
                 Transaction(
                     date=dtime.date().isoformat(),
                     description=transaction.name,
                     category=Category.Unknown,
                     amount=float(transaction.trnamt),
-                    id=transaction.fitid,
+                    id=parse_id(transaction),
                 )
             )
 
@@ -68,19 +82,43 @@ def _parse_csv(path: Path) -> List[Transaction]:
     Returns:
         The converted list of transactions.
     """
-    with path.open("r") as f:
+
+    def parse_date(transaction: Mapping[str, Any]) -> str:
+        """Try any of these keys that are used from various banks."""
+        for key in ("Transaction Date", "Date", "Trans Date"):
+            if key in transaction:
+                return transaction[key]
+        raise NotImplementedError(f"Schema is missing a transaction date column {transaction}")
+
+    def parse_amount(amount: str) -> float:
+        """Target uses a weird $(123.45) format, so sanitize that."""
+        for c in ("$", "(", ")"):
+            amount = amount.replace(c, "")
+        return float(amount)
+
+    def parse_id(transaction: Mapping[str, Any]) -> str:
+        """Some banks produce CSVs already with the REFNUM."""
+        for key in ("Reference", "Reference Number"):
+            if key in transaction:
+                return transaction[key].replace("'", "")
+        return ""
+
+    with path.open("r", encoding="utf-8") as f:
         reader = csv.DictReader(f, delimiter=",")
-        return [
-            Transaction(
-                date=transaction["Transaction Date"],
-                description=transaction["Description"],
-                category=STRING_CATEGORY_MAP[transaction["Category"]],
-                amount=float(transaction["Amount"]),
-                id="",
-            )
-            for transaction in reader
-            if transaction["Description"] not in IGNORED_TRANSACTION_KEYS
-        ]
+        try:
+            return [
+                Transaction(
+                    date=parse_date(transaction),
+                    description=transaction["Description"],
+                    category=STRING_CATEGORY_MAP[transaction["Category"]],
+                    amount=parse_amount(transaction["Amount"]),
+                    id=parse_id(transaction),
+                )
+                for transaction in reader
+                if transaction["Description"] not in IGNORED_TRANSACTION_KEYS
+            ]
+        except NotImplementedError as e:
+            raise SchemaMismatchError(f"CSV headers mismatch: {reader.fieldnames}") from e
 
 
 def parse(path: Path) -> List[Transaction]:
@@ -94,8 +132,10 @@ def parse(path: Path) -> List[Transaction]:
         The converted list of transactions.
     """
     match path.suffix.lower():
-        case ".csv": return _parse_csv(path)
-        case ".ofx": return _parse_ofx(path)
+        case ".csv":
+            return _parse_csv(path)
+        case (".ofx" | ".qfx"):
+            return _parse_ofx(path)
     raise RuntimeError(f"Only CSV/OFX files are supported, not {path.suffix}")
 
 
@@ -104,7 +144,9 @@ def parse(path: Path) -> List[Transaction]:
 def cli(path: str) -> None:
     """CLI to manually test the functions."""
     import pprint
+
     pprint.pprint(parse(Path(path)))
+
 
 if __name__ == "__main__":
     cli()  # pylint: disable=no-value-for-parameter

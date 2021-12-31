@@ -15,6 +15,8 @@ CategoryMap = Mapping[str, Category]
 CATEGORY_LOOKUP_TABLE_PATH = Path("./data/category_lookup_table.yaml")
 CATEGORY_HINT_CONFIG_PATH = Path("./data/category_hint_config.yaml")
 STRING_CATEGORY_MAP: CategoryMap = {
+    "": Category.Unknown,
+    # Chase strings
     "Automotive": Category.Automotive,
     "Bills & Utilities": Category.BillsUtilities,
     "Education": Category.Education,
@@ -31,6 +33,49 @@ STRING_CATEGORY_MAP: CategoryMap = {
     "Professional Services": Category.ProfessionalServices,
     "Shopping": Category.Shopping,
     "Travel": Category.Travel,
+    # AMEX strings
+    "Business Services-Advertising Services": Category.Entertainment,
+    "Business Services-Health Care Services": Category.Health,
+    "Business Services-Mailing & Shipping": Category.ProfessionalServices,
+    "Business Services-Other Services": Category.Miscellaneous,
+    "Business Services-Printing & Publishing": Category.ProfessionalServices,
+    "Business Services-Professional Services": Category.ProfessionalServices,
+    "Communications-Cable & Internet Comm": Category.Entertainment,
+    "Entertainment-Associations": Category.Entertainment,
+    "Entertainment-General Attractions": Category.Entertainment,
+    "Entertainment-General Events": Category.Entertainment,
+    "Entertainment-Other Entertainment": Category.Entertainment,
+    "Entertainment-Theatrical Events": Category.Entertainment,
+    "Entertainment-Theme Parks": Category.Entertainment,
+    "Fees & Adjustments-Fees & Adjustments": Category.FeesAdjustments,
+    "Merchandise & Supplies-Appliance Stores": Category.Shopping,
+    "Merchandise & Supplies-Arts & Jewelry": Category.Shopping,
+    "Merchandise & Supplies-Book Stores": Category.Shopping,
+    "Merchandise & Supplies-Clothing Stores": Category.Shopping,
+    "Merchandise & Supplies-Computer Supplies": Category.Shopping,
+    "Merchandise & Supplies-Department Stores": Category.Shopping,
+    "Merchandise & Supplies-Florists & Garden": Category.Shopping,
+    "Merchandise & Supplies-Furnishing": Category.Shopping,
+    "Merchandise & Supplies-General Retail": Category.Shopping,
+    "Merchandise & Supplies-Groceries": Category.Groceries,
+    "Merchandise & Supplies-Hardware Supplies": Category.Shopping,
+    "Merchandise & Supplies-Internet Purchase": Category.Shopping,
+    "Merchandise & Supplies-Mail Order": Category.Entertainment,
+    "Merchandise & Supplies-Pharmacies": Category.Health,
+    "Merchandise & Supplies-Sporting Goods Stores": Category.Shopping,
+    "Merchandise & Supplies-Wholesale Stores": Category.Shopping,
+    "Other-Government Services": Category.ProfessionalServices,
+    "Other-Miscellaneous": Category.Miscellaneous,
+    "Restaurant-Bar & Café": Category.Food,
+    "Restaurant-Restaurant": Category.Food,
+    "Transportation-Auto Services": Category.Automotive,
+    "Transportation-Fuel": Category.Automotive,
+    "Transportation-Other Transportation": Category.Travel,
+    "Transportation-Parking Charges": Category.ProfessionalServices,
+    "Transportation-Taxis & Coach": Category.Travel,
+    "Travel-Airline": Category.Travel,
+    "Travel-Lodging": Category.Travel,
+    "Travel-Travel Agencies": Category.Travel,
 }
 
 
@@ -69,15 +114,10 @@ class CategoryHinter:
 
     def _split_description(self, description: str) -> List[str]:
         """Tokenizes the description and strips non alphanumeric characters/whitespaces."""
-        description = "".join(
-            c if str.isalnum(c) or str.isspace(c) or c == "&" else " "
-            for c in description
-        )
+        description = "".join(c if str.isalnum(c) or str.isspace(c) or c == "&" else " " for c in description)
 
         def is_valid_word(s: str) -> bool:
-            return (
-                len(s) > 0 and all(str.isalnum(c) or c == "&" for c in s) and s != "&"
-            )
+            return len(s) > 0 and all(str.isalnum(c) or c == "&" for c in s) and s != "&"
 
         return list(filter(is_valid_word, description.split(" ")))
 
@@ -98,9 +138,7 @@ class CategoryHinter:
             raise RuntimeError(f"{key} can not contain whitespaces, it must be 1 word")
         self._config[key] = category
 
-    def build_hints(
-        self, description_category_map: CategoryMap, do_flush: bool
-    ) -> None:
+    def build_hints(self, description_category_map: CategoryMap, do_flush: bool) -> None:
         """
         Builds a category map of individual words from the input category map of descriptions.
         Params:

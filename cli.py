@@ -1,6 +1,8 @@
 import cmd
+import glob
 import pprint
 import sqlite3
+import traceback
 from itertools import permutations
 from pathlib import Path
 from textwrap import dedent
@@ -44,19 +46,44 @@ class CLI(cmd.Cmd):
                     return
                 f(user, args)
 
+            # Save this so it can be invoked directly if necessary
+            g.base_function = f
+            return g
+
+        # Do not allow a command to crash the program
+        def try_catch_decorator(f):
+            def g(arg: str) -> None:
+                try:
+                    f(arg)
+                except Exception:
+                    print(traceback.format_exc())
+
+            # Save this so it can be invoked directly if necessary
+            g.base_function = f
             return g
 
         # Decorate methods that require a user arg
-        methods_that_require_user = ("do_update_database", "do_update_categories", "do_tag")
+        methods_that_require_user: Tuple[str] = (
+            "do_import_categories",
+            "do_update_database",
+            "do_update_categories",
+            "do_tag",
+            "do_bootstrap",
+        )
         for method in methods_that_require_user:
-            setattr(self, method, parse_user_decorator(getattr(self, method)))
+            setattr(self, method, try_catch_decorator(parse_user_decorator(getattr(self, method))))
             setattr(self, f"complete_{method.replace('do_', '')}", self._complete_user)
 
+        # Make sure all commands have a corresponding help method
         attributes = dir(self)
         for method in attributes:
             if method.startswith("do_") and method not in ("do_exit", "do_help"):
                 if f"help_{method.replace('do_', '')}" not in attributes:
                     raise NotImplementedError(f"Missing help method for {method}")
+
+    def help_bootstrap(self) -> None:
+        """Help text for [do_bootstrap]."""
+        print("TODO")
 
     def help_update_database(self) -> None:
         """Help text for [do_update_database]."""
@@ -182,12 +209,31 @@ class CLI(cmd.Cmd):
             return None, []
         return user, args[1:]
 
+    def do_bootstrap(self, user: str, args: List[str]) -> None:
+        """Refer to [help_bootstrap] for documentation."""
+        if not args:
+            print("Expected a root path arg")
+            return
+        root_dir = Path(args[0]) / user
+        if not root_dir.exists():
+            print(f"Expected {root_dir} to exist")
+            return
+        ofx_files = glob.glob("*.ofx", root_dir=root_dir)
+        qfx_files = glob.glob("*.qfx", root_dir=root_dir)
+        csv_files = glob.glob("*.csv", root_dir=root_dir)
+        for path in ofx_files + qfx_files:
+            self.do_update_database.base_function(user, args=[root_dir / path])
+        for path in csv_files:
+            self.do_import_categories.base_function(user, args=[root_dir / path])
+        self.do_update_categories.base_function(user, [])
+
     def do_update_database(self, user: str, args: List[str]):
         """Refer to [help_update_database] for documentation."""
         maybe_path: Optional[str] = args[0] if args else None
-        if path := self._determine_path(maybe_path, expected_extensions=[".ofx"]):
+        if path := self._determine_path(maybe_path, expected_extensions=[".ofx", ".qfx"]):
             print(f"Updating database with : {path}")
             transactions = parse(path)
+            print(f"Found {len(transactions)} transactions")
             with database.session(db=database.write(user, path=DATABASE_PATH, transactions=transactions)):
                 pass
 
@@ -195,13 +241,20 @@ class CLI(cmd.Cmd):
         """Refer to [help_update_categories] for documentation."""
         unknown_transactions = database.read_unknown_categories(user, path=DATABASE_PATH)
         print(f"Found {len(unknown_transactions)} transactions with unknown categories")
-        determine_transaction_categories(unknown_transactions)
+        unknown_transactions = determine_transaction_categories(unknown_transactions, do_prompt=False)
+        try:
+            unknown_transactions = determine_transaction_categories(unknown_transactions, do_prompt=True)
+        except KeyboardInterrupt:
+            # Allow cancelling the prompting
+            pass
+
         database.write(user, path=DATABASE_PATH, transactions=unknown_transactions, do_overwrite=True)
         print(f"Populated {len(unknown_transactions)} transactions with categories")
 
-    def do_import_categories(self, arg: str):
+    def do_import_categories(self, user: str, args: List[str]):
         """Refer to [help_import_categories] for documentation."""
-        if path := self._determine_path(arg, expected_extensions=[".csv"]):
+        maybe_path: Optional[str] = args[0] if args else None
+        if path := self._determine_path(maybe_path, expected_extensions=[".csv"]):
             print(f"Importing categories from : {path}")
             with CategoryLookupTable(config_path=CATEGORY_LOOKUP_TABLE_PATH) as table:
                 transactions = parse(path)
@@ -212,6 +265,20 @@ class CLI(cmd.Cmd):
 
                 hinter = CategoryHinter(config_path=CATEGORY_HINT_CONFIG_PATH)
                 hinter.build_hints(table._table, do_flush=True)
+
+            count: int = 0
+            transaction_map = {transaction.id: transaction for transaction in transactions}  # pylint: disable=not-an-iterable
+            unknown_transactions = database.read_unknown_categories(user, path=DATABASE_PATH)
+            for unknown_transaction in unknown_transactions:
+                try:
+                    unknown_transaction.category = transaction_map[unknown_transaction.id].category
+                    count += 1
+                except KeyError:
+                    pass
+            if count > 0:
+                with database.session(DATABASE_PATH) as db:
+                    database.write(user, db=db, transactions=unknown_transactions, do_overwrite=True)
+                print(f"Updated {count} existing transactions with categories")
 
     def do_exec(self, arg: str) -> None:
         """Refer to [help_exec] for documentation."""
