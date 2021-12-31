@@ -12,38 +12,10 @@ from transaction import Transaction
 
 # Transactions used in the tests below
 TRANSACTIONS = [
-    Transaction(
-        date="2021-01-01",
-        description="DOORDASH",
-        category=Category.Food,
-        amount=111.11,
-        id="111",
-        tags=["doordash", "food"],
-    ),
-    Transaction(
-        date="2021-02-02",
-        description="PG&E",
-        category=Category.BillsUtilities,
-        amount=222.22,
-        id="222",
-        tags=["bills"],
-    ),
-    Transaction(
-        date="2021-03-03",
-        description="TODDSNYDER",
-        category=Category.Shopping,
-        amount=333.33,
-        id="333",
-        tags=["clothes"],
-    ),
-    Transaction(
-        date="2021-04-04",
-        description="GARBAGE",
-        category=Category.Unknown,
-        amount=444.44,
-        id="444",
-        tags=["bills"],
-    ),
+    Transaction(date="2021-01-01", description="DOORDASH", category=Category.Food, amount=-111.11, id="111", tags=["doordash", "food"]),
+    Transaction(date="2021-02-02", description="PG&E", category=Category.BillsUtilities, amount=-222.22, id="222", tags=["bills"]),
+    Transaction(date="2021-03-03", description="TODDSNYDER", category=Category.Shopping, amount=-333.33, id="333", tags=["clothes"]),
+    Transaction(date="2021-04-04", description="GARBAGE", category=Category.Unknown, amount=-444.44, id="444", tags=["bills"]),
 ]
 
 USER: str = "PyTest"
@@ -194,3 +166,35 @@ def test_tag(monkeypatch: Any) -> None:
         expected_transactions[0].tags.append("stupid")
         expected_transactions[-1].tags.append("stupid")
         check(db, expected_transactions)
+
+
+def test_select() -> None:
+    """Tests the [select] function."""
+    with database.session(":memory:") as db:
+        database.write(USER, db=db, transactions=TRANSACTIONS)
+
+        # Missing args
+        with pytest.raises(ValueError):
+            database.select(db, USER)
+
+        # tags
+        assert database.select(db, USER, tags=["bills"]) == [TRANSACTIONS[1], TRANSACTIONS[3]]
+        # description_pattern
+        assert database.select(db, USER, description_pattern="%DOORDASH%") == [TRANSACTIONS[0]]
+        # date_pattern
+        assert database.select(db, USER, date_pattern="2021-0%") == TRANSACTIONS
+        # date_pattern
+        assert database.select(db, USER, date_pattern="2021-01%") == [TRANSACTIONS[0]]
+        # category
+        assert database.select(db, USER, category=Category.Shopping) == [TRANSACTIONS[2]]
+        # top
+        assert database.select(db, USER, top=3) == list(reversed(TRANSACTIONS[1:]))
+        with pytest.raises(ValueError):
+            database.select(db, USER, top=0)
+        with pytest.raises(ValueError):
+            database.select(db, USER, top=-1)
+
+        # Combine
+        assert database.select(db, USER, top=3, date_pattern="2021-0%") == list(reversed(TRANSACTIONS[1:]))
+        assert database.select(db, USER, top=3, date_pattern="2021-0%", description_pattern=r"%G%") == [TRANSACTIONS[3], TRANSACTIONS[1]]
+        assert database.select(db, USER, top=1, date_pattern="2021-0%", description_pattern=r"%G%") == [TRANSACTIONS[3]]

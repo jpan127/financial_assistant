@@ -21,3 +21,6 @@ class Transaction:
         # Make sure this field exists
         assert any(f.name == "id" for f in dataclasses.fields(Transaction))
         return "id"
+
+
+Transactions = List[Transaction]

@@ -1,15 +1,18 @@
+import argparse
 import cmd
 import glob
 import pprint
+import readline
 import sqlite3
 import traceback
 from itertools import permutations
 from pathlib import Path
 from textwrap import dedent
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
 import click
 
+import analytics
 import config
 import database
 from category import Category
@@ -26,6 +29,25 @@ from statement_puller import determine_transaction_categories
 # @TODO: Make paths agnostic to caller
 DATABASE_PATH = Path("./data/database.db")
 DATABASE_BACKUP_PATH = Path("./data/database_backup.db")
+COMMAND_HISTORY_PATH = Path("./data/command_history.txt")
+
+
+class UsageError(Exception):
+    """The command was used incorrectly."""
+
+
+def parse_query_args(args: List[str], required: Set[str] = None) -> argparse.Namespace:
+    get_required = lambda s: s in required if required else False
+    parser = argparse.ArgumentParser(exit_on_error=False)
+    parser.add_argument("-t", "--tags", default=None, required=get_required("tags"), type=str, help="A comma separated list of tags to match.")
+    parser.add_argument("-c", "--category", default=None, required=get_required("category"), type=str, help="A category to match.")
+    parser.add_argument("-n", "--num", default=None, required=get_required("num"), type=int, help="This many to match.")
+    args = parser.parse_args(args)
+    if args.tags:
+        args.tags = args.tags.split(",")
+    if args.category:
+        args.category = Category[args.category]
+    return {k: v for k, v in vars(args).items() if v is not None}
 
 
 class CLI(cmd.Cmd):
@@ -64,11 +86,18 @@ class CLI(cmd.Cmd):
 
         # Decorate methods that require a user arg
         methods_that_require_user: Tuple[str] = (
-            "do_import_categories",
-            "do_update_database",
-            "do_update_categories",
-            "do_tag",
+            "do_accumulate",
+            "do_accumulate_by_month",
+            "do_accumulate_categories_by_month",
             "do_bootstrap",
+            "do_exec_to_backup",
+            "do_import_categories",
+            "do_tag",
+            "do_top",
+            "do_top_by_month",
+            "do_top_categories_by_month",
+            "do_update_categories",
+            "do_update_database",
         )
         for method in methods_that_require_user:
             setattr(self, method, try_catch_decorator(parse_user_decorator(getattr(self, method))))
@@ -77,9 +106,55 @@ class CLI(cmd.Cmd):
         # Make sure all commands have a corresponding help method
         attributes = dir(self)
         for method in attributes:
-            if method.startswith("do_") and method not in ("do_exit", "do_help"):
-                if f"help_{method.replace('do_', '')}" not in attributes:
-                    raise NotImplementedError(f"Missing help method for {method}")
+            if method.startswith("do_"):
+                if method not in ("do_exit", "do_help"):
+                    # Make sure all commands have a corresponding help method
+                    if f"help_{method.replace('do_', '')}" not in attributes:
+                        raise NotImplementedError(f"Missing help method for {method}")
+                    # Make sure no commands can crash the program
+                    setattr(self, method, try_catch_decorator(getattr(self, method)))
+
+    def preloop(self) -> None:
+        """Callback invoked on set up."""
+        if COMMAND_HISTORY_PATH.exists():
+            readline.read_history_file(COMMAND_HISTORY_PATH)
+
+    def postloop(self) -> None:
+        """Callback invoked on tear down."""
+        readline.write_history_file(COMMAND_HISTORY_PATH)
+
+    def help_bootstrap(self) -> None:
+        """Help text for [do_bootstrap]."""
+        print(
+            dedent(
+                """\
+            A command to either initialize or re-initialize a user's database.
+            All 3 commands are run:
+                1. update_database
+                2. import_categories
+                3. update_categories
+
+            Args:
+                1: The user, must be one of the specified users in the config file.
+                2: The root directory to search for transaction files.
+                   The directory to find transactions files will be {2}/user."""
+            )
+        )
+
+    def help_accumulate(self) -> None:
+        """Help text for [do_accumulate]."""
+        print(
+            dedent(
+                """\
+            Accumulates matched transactions.
+
+            Args:
+                1: The user, must be one of the specified users in the config file.
+                2: Any of these options: [aggregate]
+                    aggregate: Sums up all the transactions that match the tags.
+                        3...: Any number of tags to look up transactions for."""
+            )
+        )
 
     def help_bootstrap(self) -> None:
         """Help text for [do_bootstrap]."""
@@ -138,7 +213,10 @@ class CLI(cmd.Cmd):
                 "SUPER"                       | will be saved as a keyword suggesting Food
                 "GOOD"                        | will be saved as a keyword suggesting Food
                 "SUSHI"                       | will be saved as a keyword suggesting Food
-            """
+
+            Args:
+                1: The user, must be one of the specified users in the config file.
+                2. The path to the CSV file, if not already provided when starting the program."""
             )
         )
 
@@ -160,7 +238,8 @@ class CLI(cmd.Cmd):
                 """\
             Executes an arbitrary command with a copy of the database and prints the differences.
             Args:
-                1: A valid SQL command."""
+                1: The user, must be one of the specified users in the config file.
+                2: A valid SQL command."""
             )
         )
 
@@ -177,6 +256,36 @@ class CLI(cmd.Cmd):
                 3: A single alphanumeric tag keyword."""
             )
         )
+
+    def help_accumulate_by_month(self) -> None:
+        """Help text for [do_accumulate_by_month]."""
+        print(
+            dedent(
+                """\
+                ."""
+            )
+        )
+
+    def help_accumulate_categories_by_month(self) -> None:
+        """Help text for [do_accumulate_categories_by_month]."""
+        print(
+            dedent(
+                """\
+                ."""
+            )
+        )
+
+    def help_top(self) -> None:
+        """Help text for [do_top]."""
+        print(dedent("""."""))
+
+    def help_top_by_month(self) -> None:
+        """Help text for [do_top_by_month]."""
+        print(dedent("""."""))
+
+    def help_top_categories_by_month(self) -> None:
+        """Help text for [do_top_categories_by_month]."""
+        print(dedent("""."""))
 
     def _determine_path(self, arg: str, expected_extensions: List[str]) -> Optional[Path]:
         def check_extension(path: Path) -> Optional[Path]:
@@ -283,23 +392,38 @@ class CLI(cmd.Cmd):
     def do_exec(self, arg: str) -> None:
         """Refer to [help_exec] for documentation."""
         with database.session(DATABASE_PATH) as db:
+            # Backup database first
+            with database.session(DATABASE_BACKUP_PATH) as db_backup:
+                with db_backup:
+                    db.backup(db_backup)
             with db:
-                db.execute(arg)
+                cursor = db.execute(arg)
+                is_query: bool = arg.lower().startswith("select ")
+                if is_query:
+                    pprint.pprint(database.to_transactions(cursor), width=150)  # TODO: Make a config for this
 
-    def do_exec_to_backup(self, arg: str) -> None:
+    def do_exec_to_backup(self, user: str, args: List[str]) -> None:
         """Refer to [help_exec_to_backup] for documentation."""
+        if not args:
+            print("Expected a command arg")
+            return
         with database.session(DATABASE_PATH, read_only=True) as db, database.session(DATABASE_BACKUP_PATH) as db_backup:
             # Copy to backup database, then execute the command on the backup database
             with db_backup:
                 db.backup(db_backup)
-                db_backup.execute(arg)
+                cursor = db_backup.execute(" ".join(args))
+                is_query: bool = args[0].lower() == "select"
+                if is_query:
+                    pprint.pprint(database.to_transactions(cursor), width=150)  # TODO: Make a config for this
+                    return
+
             with db:
                 # Attach the databases to each other so the queries can compare them
                 db.execute("attach ? as backup", [str(DATABASE_BACKUP_PATH)])
                 # Try the different permutations with n=2 (vice versa)
                 for a, b in permutations(("main", "backup")):
                     # Determine what is in [a] but not [b]
-                    results = database.to_transactions(db.execute(f"select * from (select * from {a}.transactions except select * from {b}.transactions)"))
+                    results = database.to_transactions(db.execute(f"select * from (select * from {a}.{user} except select * from {b}.{user})"))
                     n = len(results)
                     print(f"Removed in backup ({n}):" if a == "main" else f"Added in backup ({n}):")
                     pprint.pprint(results, width=150)  # TODO: Make a config for this
@@ -321,6 +445,51 @@ class CLI(cmd.Cmd):
         except sqlite3.OperationalError as e:
             print("Caught sqlite3.OperationalError:", e)
 
+    def _do_accumulate(self, user: str, argv: List[str], callback: str) -> None:
+        if not argv:
+            raise UsageError("Expected multiple args")
+        args = parse_query_args(argv)
+        with database.session(DATABASE_PATH) as db:
+            sums, transactions = getattr(analytics.Accumulate(db, user, **args), callback)()
+        pprint.pprint(transactions, width=150)
+        pprint.pprint(sums, width=150)
+
+    def do_accumulate(self, user: str, args: List[str]) -> None:
+        """Refer to [help_accumulate] for documentation."""
+        self._do_accumulate(user, args, "__call__")
+
+    def do_accumulate_by_month(self, user: str, args: List[str]) -> None:
+        """Refer to [help_accumulate_by_month] for documentation."""
+        self._do_accumulate(user, args, "by_month")
+
+    def do_accumulate_categories_by_month(self, user: str, args: List[str]) -> None:
+        """Refer to [help_accumulate_categories_by_month] for documentation."""
+        if len(args) > 1 and args[0] == "category":
+            raise UsageError("This command does not accept a 'category' argument")
+        self._do_accumulate(user, args, "categories_by_month")
+
+    def _do_top(self, user: str, argv: List[str], callback: str) -> None:
+        if not argv:
+            raise UsageError("Expected multiple args")
+        args = parse_query_args(argv, required=set(("num")))
+        with database.session(DATABASE_PATH) as db:
+            transactions = getattr(analytics.Top(db, user, **args), callback)()
+        pprint.pprint(transactions, width=150)
+
+    def do_top(self, user: str, args: List[str]) -> None:
+        """Refer to [help_top] for documentation."""
+        self._do_top(user, args, "__call__")
+
+    def do_top_by_month(self, user: str, args: List[str]) -> None:
+        """Refer to [help_top_by_month] for documentation."""
+        self._do_top(user, args, "by_month")
+
+    def do_top_categories_by_month(self, user: str, args: List[str]) -> None:
+        """Refer to [help_top_categories_by_month] for documentation."""
+        if len(args) > 1 and args[0] == "category":
+            raise UsageError("This command does not accept a 'category' argument")
+        self._do_top(user, args, "categories_by_month")
+
     def do_exit(self, _: str) -> bool:
         """Exit the program."""
         return True
@@ -340,13 +509,19 @@ class CLI(cmd.Cmd):
 @click.command()
 @click.option("-p", "--path", type=click.Path(exists=True))
 @click.option("-c", "--config_path", type=click.Path(exists=True), default="./data/config.yaml")
-def cli(path: str, config_path: str) -> None:
+def main(path: str, config_path: str) -> None:
     """The CLI entrypoint."""
     kwargs = {}
     if path:
         kwargs["path"] = Path(path)
-    CLI(config_path=Path(config_path), **kwargs).cmdloop()
+
+    cli = CLI(config_path=Path(config_path), **kwargs)
+    try:
+        cli.cmdloop()
+    finally:
+        # Make sure to always call this to save the command history
+        cli.postloop()
 
 
 if __name__ == "__main__":
-    cli()  # pylint: disable=no-value-for-parameter
+    main()  # pylint: disable=no-value-for-parameter

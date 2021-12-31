@@ -188,3 +188,49 @@ def tag(db: sqlite3.Connection, user: str, *, format_str: str, tag_str: str, wid
                     where {match_clause}
                     """
         )
+
+
+def select(
+    db: sqlite3.Connection,
+    user: str,
+    *,
+    tags: Optional[List[str]] = None,
+    description_pattern: Optional[str] = None,
+    date_pattern: Optional[str] = None,
+    category: Optional[Category] = None,
+    top: Optional[int] = None,
+) -> List[Transaction]:
+    """A single API for using the select query with an open database connection.
+
+    Args:
+        db                  : An externally created database connection.
+        user                : The table name.
+        tags                : Values for the [tags] field to match.
+        description_pattern : A value for the [description] field to match.
+        date_pattern        : A value for the [date] field to match.
+        category            : A value for the [category] field to match.
+    Returns:
+        The matched transactions.
+    Raises:
+        ValueError: If 'top' is invalid.
+        ValueError: If no kwargs were specified.
+    """
+    if top is not None and top <= 0:
+        raise ValueError(f"'top' arg must be positive non-zero : {top}")
+    # Clauses for each pattern for each column
+    tag_clause: str = " or ".join(f"tags regexp '\\b{t}\\b'" for t in tags) if tags else ""
+    description_clause: str = f"description like '{description_pattern}'" if description_pattern else ""
+    date_clause: str = f"date like '{date_pattern}'" if date_pattern else ""
+    category_clause: str = f"category = '{category.name}'" if category else ""
+    top_clause: str = f"amount < 0 order by amount asc limit {top}" if top else ""
+
+    # Join the valid clauses together
+    match_clauses = list(filter(lambda s: bool(s), (tag_clause, description_clause, date_clause, category_clause, top_clause)))
+    if not match_clauses:
+        raise ValueError("One of the kwargs must be specified to have a where clause")
+    match_clause: str = " and ".join(match_clauses)
+
+    try:
+        return to_transactions(db.execute(f"select * from {user} where {match_clause}"))
+    except sqlite3.Error as e:
+        raise sqlite3.Error(f"match_clause = {match_clause}") from e
