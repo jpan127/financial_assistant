@@ -166,7 +166,6 @@ def tag(db: sqlite3.Connection, user: str, *, format_str: str, tag_str: str, wid
         if not matches:
             print("No matches")
             return
-        # TODO: Make a config for this
         pprint.pprint(matches, width=width)
 
         # Make sure the user is ok with the previewed changes
@@ -199,6 +198,7 @@ def select(
     date_pattern: Optional[str] = None,
     category: Optional[Category] = None,
     top: Optional[int] = None,
+    **_,
 ) -> List[Transaction]:
     """A single API for using the select query with an open database connection.
 
@@ -225,7 +225,7 @@ def select(
     top_clause: str = f"amount < 0 order by amount asc limit {top}" if top else ""
 
     # Join the valid clauses together
-    match_clauses = list(filter(lambda s: bool(s), (tag_clause, description_clause, date_clause, category_clause, top_clause)))
+    match_clauses = list(filter(bool, (tag_clause, description_clause, date_clause, category_clause, top_clause)))
     if not match_clauses:
         raise ValueError("One of the kwargs must be specified to have a where clause")
     match_clause: str = " and ".join(match_clauses)

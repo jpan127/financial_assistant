@@ -12,8 +12,6 @@ yaml = YAML(typ="safe")
 
 CategoryMap = Mapping[str, Category]
 
-CATEGORY_LOOKUP_TABLE_PATH = Path("./data/category_lookup_table.yaml")
-CATEGORY_HINT_CONFIG_PATH = Path("./data/category_hint_config.yaml")
 STRING_CATEGORY_MAP: CategoryMap = {
     "": Category.Unknown,
     # Chase strings
@@ -85,7 +83,7 @@ class CategoryHinter:
     These categories can be learned either directly from a bank history or manually by the user.
     """
 
-    def __init__(self, config_path: Path = CATEGORY_HINT_CONFIG_PATH) -> None:
+    def __init__(self, config_path: Path) -> None:
         """Initializes the config.
         Params:
             config_path: The path to the config file that this class maintains.
@@ -191,7 +189,7 @@ class CategoryLookupTable:
     Builds and maintains a table of keywords to category mapping.
     """
 
-    def __init__(self, config_path: Path = CATEGORY_LOOKUP_TABLE_PATH) -> None:
+    def __init__(self, config_path: Path) -> None:
         """Initializes the config.
         Params:
             config_path: The path to the config file that this class maintains.
