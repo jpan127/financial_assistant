@@ -173,12 +173,15 @@ def test_select() -> None:
     with database.session(":memory:") as db:
         database.write(USER, db=db, transactions=TRANSACTIONS)
 
-        # Missing args
-        with pytest.raises(ValueError):
-            database.select(db, USER)
+        # All
+        assert database.select(db, USER) == TRANSACTIONS
 
         # tags
         assert database.select(db, USER, tags=["bills"]) == [TRANSACTIONS[1], TRANSACTIONS[3]]
+        assert database.select(db, USER, not_tags=["bills"]) == [TRANSACTIONS[0], TRANSACTIONS[2]]
+        assert database.select(db, USER, not_tags=["bills", "doordash"]) == [TRANSACTIONS[2]]
+        assert database.select(db, USER, tags=["bills"], not_tags=["bills"]) == []
+
         # description_pattern
         assert database.select(db, USER, description_pattern="%DOORDASH%") == [TRANSACTIONS[0]]
         # date_pattern
@@ -193,6 +196,8 @@ def test_select() -> None:
             database.select(db, USER, top=0)
         with pytest.raises(ValueError):
             database.select(db, USER, top=-1)
+        # id
+        assert database.select(db, USER, id=222) == [TRANSACTIONS[1]]
 
         # Combine
         assert database.select(db, USER, top=3, date_pattern="2021-0%") == list(reversed(TRANSACTIONS[1:]))

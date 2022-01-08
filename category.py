@@ -25,6 +25,7 @@ class Category(Enum):
     ProfessionalServices = auto()
     Shopping = auto()
     Travel = auto()
+    Bank = auto()
 
     @classmethod
     def to_yaml(cls, representer, node):

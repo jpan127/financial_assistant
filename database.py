@@ -80,6 +80,14 @@ def write(
     # Only create the table if it doesn't already exist
     db.execute(f"create table if not exists {user} ( {COLUMN_HEADERS} )")
 
+    # Detect ID / hash collisions
+    for transaction in transactions:
+        matched_transactions = select(db, user, id=transaction.id)
+        for matched_transaction in matched_transactions:
+            for field in ("date", "description", "amount"):
+                if getattr(transaction, field) != getattr(matched_transaction, field):
+                    raise RuntimeError(f"Detected ID collision : {transaction} vs {matched_transaction}")
+
     # Insert into database
     with db:
         count_fn = lambda: list(db.execute(f"select count(*) from {user}"))[0][0]
@@ -140,6 +148,7 @@ def to_transactions(cursor: sqlite3.Cursor) -> List[Transaction]:
             amount=values[3],
             id=values[4],
             tags=values[5] or [],  # Use empty list over None
+            balance=values[6],
         )
         for values in cursor
     ]
@@ -194,10 +203,12 @@ def select(
     user: str,
     *,
     tags: Optional[List[str]] = None,
+    not_tags: Optional[List[str]] = None,
     description_pattern: Optional[str] = None,
     date_pattern: Optional[str] = None,
     category: Optional[Category] = None,
     top: Optional[int] = None,
+    id: Optional[str] = None,
     **_,
 ) -> List[Transaction]:
     """A single API for using the select query with an open database connection.
@@ -206,9 +217,11 @@ def select(
         db                  : An externally created database connection.
         user                : The table name.
         tags                : Values for the [tags] field to match.
+        not_tags            : Values for the [tags] field to NOT match.
         description_pattern : A value for the [description] field to match.
         date_pattern        : A value for the [date] field to match.
         category            : A value for the [category] field to match.
+        id                  : A value for the [id] field to match.
     Returns:
         The matched transactions.
     Raises:
@@ -219,18 +232,33 @@ def select(
         raise ValueError(f"'top' arg must be positive non-zero : {top}")
     # Clauses for each pattern for each column
     tag_clause: str = " or ".join(f"tags regexp '\\b{t}\\b'" for t in tags) if tags else ""
+    not_tag_clause: str = " and ".join(f"tags not regexp '\\b{t}\\b'" for t in not_tags) if not_tags else ""
     description_clause: str = f"description like '{description_pattern}'" if description_pattern else ""
     date_clause: str = f"date like '{date_pattern}'" if date_pattern else ""
     category_clause: str = f"category = '{category.name}'" if category else ""
-    top_clause: str = f"amount < 0 order by amount asc limit {top}" if top else ""
+    negative_clause: str = "amount < 0" if top else ""
+    top_clause: str = f"order by amount asc limit {top}" if top else ""
+    id_clause: str = f"id = '{id}'" if id else ""
 
     # Join the valid clauses together
-    match_clauses = list(filter(bool, (tag_clause, description_clause, date_clause, category_clause, top_clause)))
-    if not match_clauses:
-        raise ValueError("One of the kwargs must be specified to have a where clause")
-    match_clause: str = " and ".join(match_clauses)
+    match_clauses = list(
+        filter(
+            bool,
+            (
+                tag_clause,
+                not_tag_clause,
+                description_clause,
+                date_clause,
+                category_clause,
+                negative_clause,
+                id_clause,
+            ),
+        )
+    )
+    match_clause: str = f"where ({') and ('.join(match_clauses)})" if match_clauses else ""
+    match_clause += top_clause
 
     try:
-        return to_transactions(db.execute(f"select * from {user} where {match_clause}"))
+        return to_transactions(db.execute(f"select * from {user} {match_clause}"))
     except sqlite3.Error as e:
         raise sqlite3.Error(f"match_clause = {match_clause}") from e

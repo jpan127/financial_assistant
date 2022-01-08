@@ -9,16 +9,17 @@ import traceback
 from itertools import permutations
 from pathlib import Path
 from textwrap import dedent
-from typing import List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import click
 
 import analytics
 import config
 import database
+import statement_parser
+import bank_history_parser
 from category import Category
 from category_lookup_table import CategoryLookupTable, CategoryHinter
-from statement_parser import parse
 from statement_puller import determine_transaction_categories
 
 
@@ -38,12 +39,16 @@ def _make_parser(required: Set[str] = None) -> argparse.ArgumentParser:
     get_required = lambda s: required and s in required
     parser = argparse.ArgumentParser(exit_on_error=False)
     parser.add_argument("-t", "--tags", default=None, required=get_required("tags"), type=str, help="A comma separated list of tags to match.")
+    parser.add_argument("--not-tags", default=None, required=get_required("tags"), type=str, help="A comma separated list of tags to NOT match.")
     parser.add_argument("-c", "--category", default=None, required=get_required("category"), type=str, help="A category to match.")
     parser.add_argument("-n", "--num", default=None, required=get_required("num"), type=int, help="This many to match.")
+    parser.add_argument("-p", "--path", default=None, required=get_required("path"), type=click.Path(exists=True, path_type=Path), help="Path to the file to read.")
+    parser.add_argument("-b", "--bank", default=None, required=get_required("bank"), type=str, help="The name of the bank.")
+    parser.add_argument("-d", "--description_pattern", default=None, required=get_required("description_pattern"), type=str, help="The description pattern to match.")
     return parser
 
 
-def parse_query_args(parser: argparse.ArgumentParser, argv: List[str]) -> argparse.Namespace:
+def parse_query_args(parser: argparse.ArgumentParser, argv: List[str]) -> Dict[str, Any]:
     """Parses the arguments with the parser.
 
     Args:
@@ -60,6 +65,8 @@ def parse_query_args(parser: argparse.ArgumentParser, argv: List[str]) -> argpar
     # Post process the args
     if args.tags:
         args.tags = args.tags.split(",")
+    if args.not_tags:
+        args.not_tags = args.not_tags.split(",")
     if args.category:
         args.category = Category[args.category]
     # Strip out unspecified args and convert to a dictionary
@@ -99,6 +106,7 @@ class CLI(cmd.Cmd):
         self._config = config.load(kwargs["config_path"])
         self._accumulate_parser = _make_parser()
         self._top_parser = _make_parser(required={"num"})
+        self._import_bank_history_parser = _make_parser(required={"bank"})
         self._debug = kwargs.get("debug", False)
         super().__init__()
 
@@ -119,7 +127,8 @@ class CLI(cmd.Cmd):
                 try:
                     f(arg)
                 except Exception:
-                    exception: str = traceback.format_exception_only(sys.exc_info()[0], sys.exc_info()[1])[0]
+                    exception: str = traceback.format_exc() if self._debug else\
+                                     traceback.format_exception_only(sys.exc_info()[0], sys.exc_info()[1])[0]
                     print(f"Caught exception:\n  {exception}")
 
             # Save this so it can be invoked directly if necessary
@@ -139,7 +148,8 @@ class CLI(cmd.Cmd):
             "do_top_by_month",
             "do_top_categories_by_month",
             "do_update_categories",
-            "do_update_database",
+            "do_import_statement",
+            "do_import_bank_history",
         )
         for method in methods_that_require_user:
             setattr(self, method, try_catch_decorator(parse_user_decorator(getattr(self, method))))
@@ -172,7 +182,7 @@ class CLI(cmd.Cmd):
                 """\
             A command to either initialize or re-initialize a user's database.
             All 3 commands are run:
-                1. update_database
+                1. import_statement
                 2. import_categories
                 3. update_categories
 
@@ -183,18 +193,33 @@ class CLI(cmd.Cmd):
             )
         )
 
-    def help_update_database(self) -> None:
-        """Help text for [do_update_database]."""
+    def help_import_statement(self) -> None:
+        """Help text for [do_import_statement]."""
         print(
             dedent(
                 """\
-            Provide an OFX file that contains bank transactions.
+            Provide an OFX file that contains card transactions.
             These transactions will be parsed and stored into the database.
             Keep in mind that OFX transactions do not specify categories so they will need to be populated subsequently.
 
             Args:
                 1: The user, must be one of the specified users in the config file.
                 2: The path to the OFX file.
+            """
+            )
+        )
+
+    def help_import_bank_history(self) -> None:
+        """Help text for [do_import_bank_history]."""
+        print(
+            dedent(
+                """\
+            Provide a CSV file that contains bank history.
+            These transactions will be parsed and stored into the database.
+
+            Args:
+                1: The user, must be one of the specified users in the config file.
+                2: The path to the CSV file.
             """
             )
         )
@@ -221,7 +246,7 @@ class CLI(cmd.Cmd):
         print(
             dedent(
                 """\
-            Provide a CSV file that contains bank transactions.
+            Provide a CSV file that contains card transactions.
             It is expected that the CSV contains categories for each transaction.
             These transactions will be parsed and their categories mapped to their description.
             It will be known that this exact description matches this category.
@@ -396,20 +421,31 @@ class CLI(cmd.Cmd):
         qfx_files = glob.glob("*.qfx", root_dir=root_dir)
         csv_files = glob.glob("*.csv", root_dir=root_dir)
         for path in ofx_files + qfx_files:
-            self.do_update_database.base_function(user, args=[root_dir / path])
+            self.do_import_statement.base_function(user, args=[root_dir / path])
         for path in csv_files:
             self.do_import_categories.base_function(user, args=[root_dir / path])
         self.do_update_categories.base_function(user, [])
 
-    def do_update_database(self, user: str, args: List[str]):
-        """Refer to [help_update_database] for documentation."""
+    def do_import_statement(self, user: str, args: List[str]):
+        """Refer to [help_import_statement] for documentation."""
         maybe_path: Optional[str] = args[0] if args else None
         if path := self._determine_path(maybe_path, expected_extensions=[".ofx", ".qfx"]):
             print(f"Updating database with : {path}")
-            transactions = parse(path)
+            transactions = statement_parser.parse(path)
             print(f"Found {len(transactions)} transactions")
             with database.session(db=database.write(user, path=self._config.paths.database, transactions=transactions)):
                 pass
+
+    def do_import_bank_history(self, user: str, argv: List[str]):
+        """Refer to [help_import_bank_history] for documentation."""
+        args = parse_query_args(self._import_bank_history_parser, argv)
+        if path := self._determine_path(args.get("path", None), expected_extensions=[".csv"]):
+            print(f"Updating database with : {path}")
+            transactions = bank_history_parser.parse(path, bank=args["bank"])
+            print(f"Found {len(transactions)} transactions")
+            with database.session(db=database.write(user, path=self._config.paths.database, transactions=transactions)):
+                pass
+            analytics.print_bank_stats(analytics.calc_bank_stats(analytics.split_transactions_by_month(transactions)))
 
     def do_update_categories(self, user: str, _: List[str]):
         """Refer to [help_update_categories] for documentation."""
@@ -422,7 +458,7 @@ class CLI(cmd.Cmd):
             # Allow cancelling the prompting
             pass
 
-        database.write(user, path=self._config.paths.database, transactions=unknown_transactions, do_overwrite=True)
+        database.write(user, path=self._config.paths.database, transactions=unknown_transactions, do_overwrite=True) # @TODO: Would be good to only overwrite certain columns
         print(f"Populated {len(unknown_transactions)} transactions with categories")
 
     def do_import_categories(self, user: str, args: List[str]):
@@ -431,7 +467,7 @@ class CLI(cmd.Cmd):
         if path := self._determine_path(maybe_path, expected_extensions=[".csv"]):
             print(f"Importing categories from : {path}")
             with CategoryLookupTable(config_path=self._config.paths.category_lookup_table) as table:
-                transactions = parse(path)
+                transactions = statement_parser.parse(path)
                 print(f"Found {len(transactions)} transactions")
                 for transaction in transactions:  # pylint: disable=not-an-iterable
                     if transaction.category != Category.Unknown:
@@ -451,7 +487,7 @@ class CLI(cmd.Cmd):
                     pass
             if count > 0:
                 with database.session(self._config.paths.database) as db:
-                    database.write(user, db=db, transactions=unknown_transactions, do_overwrite=True)
+                    database.write(user, db=db, transactions=unknown_transactions, do_overwrite=True) # @TODO: Would be good to only overwrite certain columns
                 print(f"Updated {count} existing transactions with categories")
 
     def do_exec(self, arg: str) -> None:
@@ -515,6 +551,7 @@ class CLI(cmd.Cmd):
         with database.session(self._config.paths.database) as db:
             sums, transactions = getattr(analytics.Accumulate(db, user, **args), callback)()
         pprint.pprint(transactions, width=self._config.terminal_width)
+        print("Sums: ", end="")
         pprint.pprint(sums, width=self._config.terminal_width)
 
     def do_accumulate(self, user: str, args: List[str]) -> None:
