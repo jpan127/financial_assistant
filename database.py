@@ -86,7 +86,7 @@ def write(
         for matched_transaction in matched_transactions:
             for field in ("date", "description", "amount"):
                 if getattr(transaction, field) != getattr(matched_transaction, field):
-                    raise RuntimeError(f"Detected ID collision : {transaction} vs {matched_transaction}")
+                    raise RuntimeError(f"Detected ID collision {transaction.id} vs {matched_transaction.id} : {transaction} vs {matched_transaction}")
 
     # Insert into database
     with db:

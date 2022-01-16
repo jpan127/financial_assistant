@@ -1,0 +1,95 @@
+OFXHEADER:100
+DATA:OFXSGML
+VERSION:103
+SECURITY:NONE
+ENCODING:USASCII
+CHARSET:1252
+COMPRESSION:NONE
+OLDFILEUID:NONE
+NEWFILEUID:11111111111111111111111111111111
+<OFX>
+    <SIGNONMSGSRSV1>
+        <SONRS>
+            <STATUS>
+                <CODE>
+                    0
+                    <SEVERITY>
+                        INFO
+                        <MESSAGE>
+SUCCESS
+            </STATUS>
+            <DTSERVER>
+                20211204170458.575[-5:EST]
+                <LANGUAGE>
+                    ENG
+                    <FI>
+                        <ORG>
+                            B1
+                            <FID>
+123
+                    </FI>
+        </SONRS>
+    </SIGNONMSGSRSV1>
+    <CREDITCARDMSGSRSV1>
+        <CCSTMTTRNRS>
+            <TRNUID>
+                11111111111111111111111111111111
+                <STATUS>
+                    <CODE>
+                        0
+                        <SEVERITY>
+INFO
+                </STATUS>
+                <CLTCOOKIE>
+                    123
+                    <CCSTMTRS>
+                        <CURDEF>
+                            USD
+                            <CCACCTFROM>
+                                <ACCTID>
+1111111111111111
+                            </CCACCTFROM>
+                            <BANKTRANLIST>
+                                <DTSTART>
+                                    20201201190000.000[-5:EST]
+                                    <DTEND>
+                                        20211204170458.891[-5:EST]
+                                        <STMTTRN>
+                                            <TRNTYPE>
+                                                DEBIT
+                                                <DTPOSTED>
+                                                    20211225120000[0:GMT]
+                                                    <TRNAMT>
+                                                        -123.45
+                                                        <FITID>
+                                                            1111111111111111111111111111111
+                                                            <NAME>DOORDASH1
+                                        </STMTTRN>
+                                        <STMTTRN>
+                                            <TRNTYPE>
+                                                DEBIT
+                                                <DTPOSTED>
+                                                    20210101120000[0:GMT]
+                                                    <TRNAMT>
+                                                        -678.90
+                                                        <FITID>
+                                                            2222222222222222222222222222222
+                                                            <NAME>SAFEWAY
+                                        </STMTTRN>
+                            </BANKTRANLIST>
+                            <LEDGERBAL>
+                                <BALAMT>
+                                    1234.56
+                                    <DTASOF>
+20211204070000.000[-5:EST]
+                            </LEDGERBAL>
+                            <AVAILBAL>
+                                <BALAMT>
+                                    1234.56
+                                    <DTASOF>
+20211204070000.000[-5:EST]
+                            </AVAILBAL>
+                    </CCSTMTRS>
+        </CCSTMTTRNRS>
+    </CREDITCARDMSGSRSV1>
+</OFX>

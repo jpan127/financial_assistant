@@ -43,7 +43,6 @@ def _make_parser(required: Set[str] = None) -> argparse.ArgumentParser:
     parser.add_argument("-c", "--category", default=None, required=get_required("category"), type=str, help="A category to match.")
     parser.add_argument("-n", "--num", default=None, required=get_required("num"), type=int, help="This many to match.")
     parser.add_argument("-p", "--path", default=None, required=get_required("path"), type=click.Path(exists=True, path_type=Path), help="Path to the file to read.")
-    parser.add_argument("-b", "--bank", default=None, required=get_required("bank"), type=str, help="The name of the bank.")
     parser.add_argument("-d", "--description_pattern", default=None, required=get_required("description_pattern"), type=str, help="The description pattern to match.")
     return parser
 
@@ -106,7 +105,7 @@ class CLI(cmd.Cmd):
         self._config = config.load(kwargs["config_path"])
         self._accumulate_parser = _make_parser()
         self._top_parser = _make_parser(required={"num"})
-        self._import_bank_history_parser = _make_parser(required={"bank"})
+        self._import_bank_history_parser = _make_parser()
         self._debug = kwargs.get("debug", False)
         super().__init__()
 
@@ -127,12 +126,14 @@ class CLI(cmd.Cmd):
                 try:
                     f(arg)
                 except Exception:
-                    exception: str = traceback.format_exc() if self._debug else\
-                                     traceback.format_exception_only(sys.exc_info()[0], sys.exc_info()[1])[0]
+                    exception: str = traceback.format_exc() if self._debug else traceback.format_exception_only(sys.exc_info()[0], sys.exc_info()[1])[0]
                     print(f"Caught exception:\n  {exception}")
 
             # Save this so it can be invoked directly if necessary
-            g.base_function = f
+            if base_function := getattr(f, "base_function", None):
+                g.base_function = base_function
+            else:
+                g.base_function = f
             return g
 
         # Decorate methods that require a user arg
@@ -152,7 +153,7 @@ class CLI(cmd.Cmd):
             "do_import_bank_history",
         )
         for method in methods_that_require_user:
-            setattr(self, method, try_catch_decorator(parse_user_decorator(getattr(self, method))))
+            setattr(self, method, parse_user_decorator(getattr(self, method)))
             setattr(self, f"complete_{method.replace('do_', '')}", self._complete_user)
 
         # Make sure all commands have a corresponding help method
@@ -441,7 +442,7 @@ class CLI(cmd.Cmd):
         args = parse_query_args(self._import_bank_history_parser, argv)
         if path := self._determine_path(args.get("path", None), expected_extensions=[".csv"]):
             print(f"Updating database with : {path}")
-            transactions = bank_history_parser.parse(path, bank=args["bank"])
+            transactions = bank_history_parser.parse(path)
             print(f"Found {len(transactions)} transactions")
             with database.session(db=database.write(user, path=self._config.paths.database, transactions=transactions)):
                 pass
@@ -451,29 +452,38 @@ class CLI(cmd.Cmd):
         """Refer to [help_update_categories] for documentation."""
         unknown_transactions = database.read_unknown_categories(user, path=self._config.paths.database)
         print(f"Found {len(unknown_transactions)} transactions with unknown categories")
-        unknown_transactions = determine_transaction_categories(unknown_transactions, do_prompt=False)
-        try:
-            unknown_transactions = determine_transaction_categories(unknown_transactions, do_prompt=True)
-        except KeyboardInterrupt:
-            # Allow cancelling the prompting
-            pass
+        with CategoryLookupTable(config_path=self._config.paths.category_lookup_table) as table, CategoryHinter(config_path=self._config.paths.category_hint_config) as hinter:
+            # Determine the known categories for known transactions from the set of unknown transactions, and write to database
+            unknown_transactions = determine_transaction_categories(table, hinter, unknown_transactions, do_prompt=False)
+            known_transactions = [t for t in unknown_transactions if t.category != Category.Unknown]
+            num: int = len(known_transactions)
+            database.write(user, path=self._config.paths.database, transactions=known_transactions, do_overwrite=True)  # @TODO: Would be good to only overwrite certain columns
 
-        database.write(user, path=self._config.paths.database, transactions=unknown_transactions, do_overwrite=True) # @TODO: Would be good to only overwrite certain columns
-        print(f"Populated {len(unknown_transactions)} transactions with categories")
+            # Prompt the user for the rest of the unknown transactions
+            unknown_transactions[:] = [t for t in unknown_transactions if t.category == Category.Unknown]
+            try:
+                unknown_transactions = determine_transaction_categories(table, hinter, unknown_transactions, do_prompt=True)
+            except KeyboardInterrupt:
+                # Allow cancelling the prompting
+                pass
+            known_transactions[:] = [t for t in unknown_transactions if t.category != Category.Unknown]
+            num += len(known_transactions)
+            database.write(user, path=self._config.paths.database, transactions=known_transactions, do_overwrite=True)  # @TODO: Would be good to only overwrite certain columns
+
+        print(f"Populated {num} transactions with categories")
 
     def do_import_categories(self, user: str, args: List[str]):
         """Refer to [help_import_categories] for documentation."""
         maybe_path: Optional[str] = args[0] if args else None
         if path := self._determine_path(maybe_path, expected_extensions=[".csv"]):
             print(f"Importing categories from : {path}")
-            with CategoryLookupTable(config_path=self._config.paths.category_lookup_table) as table:
+            with CategoryLookupTable(config_path=self._config.paths.category_lookup_table) as table, CategoryHinter(config_path=self._config.paths.category_hint_config) as hinter:
                 transactions = statement_parser.parse(path)
                 print(f"Found {len(transactions)} transactions")
                 for transaction in transactions:  # pylint: disable=not-an-iterable
                     if transaction.category != Category.Unknown:
                         table.store(transaction.description, transaction.category)
 
-                hinter = CategoryHinter(config_path=self._config.paths.category_hint_config)
                 hinter.build_hints(table._table, do_flush=True)
 
             count: int = 0
@@ -487,7 +497,7 @@ class CLI(cmd.Cmd):
                     pass
             if count > 0:
                 with database.session(self._config.paths.database) as db:
-                    database.write(user, db=db, transactions=unknown_transactions, do_overwrite=True) # @TODO: Would be good to only overwrite certain columns
+                    database.write(user, db=db, transactions=unknown_transactions, do_overwrite=True)  # @TODO: Would be good to only overwrite certain columns
                 print(f"Updated {count} existing transactions with categories")
 
     def do_exec(self, arg: str) -> None:

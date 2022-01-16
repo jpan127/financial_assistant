@@ -13,7 +13,7 @@ from transaction import Transaction
 from statement_parser import parse
 
 
-def _prompt_user_for_category(hinter: CategoryHinter, table: CategoryLookupTable, description: str, description_suffix: str) -> Category:
+def _prompt_user_for_category(table: CategoryLookupTable, hinter: CategoryHinter, description: str, description_suffix: str) -> Category:
     """
     Prompts the user so the user can decide what category this transaction belongs in.
     The user can either:
@@ -25,8 +25,8 @@ def _prompt_user_for_category(hinter: CategoryHinter, table: CategoryLookupTable
            The description to category mapping will be saved in the lookup table
 
     Params:
-        hinter             : Produces hints for the potential categories based on the description.
         table              : Lookup table to store the category for the description.
+        hinter             : Produces hints for the potential categories based on the description.
         description        : The transaction's description.
         description_suffix : A suffix to append to the description.
     Returns:
@@ -70,26 +70,33 @@ def _prompt_user_for_category(hinter: CategoryHinter, table: CategoryLookupTable
             pass
 
 
-def determine_transaction_categories(transactions: List[Transaction], do_prompt: bool) -> List[Transaction]:
+def determine_transaction_categories(
+    table: CategoryLookupTable,
+    hinter: CategoryHinter,
+    transactions: List[Transaction],
+    *,
+    do_prompt: bool,
+) -> List[Transaction]:
     """
     Determines the categories for all unknown categories.
 
     Args:
+        table        : Lookup table to store the category for the description.
+        hinter       : Produces hints for the potential categories based on the description.
         transactions : All the transactions to determine categories for.
         do_prompt    : True to prompt the user for which category is best.
     Returns:
         The modified transactions.
     """
-    with CategoryLookupTable() as table, CategoryHinter() as hinter:
-        for i, transaction in enumerate(transactions):
-            # Try to load from the lookup table first
-            if category := table.load(transaction.description):
-                transactions[i].category = category
-                continue
+    for i, transaction in enumerate(transactions):
+        # Try to load from the lookup table first
+        if category := table.load(transaction.description):
+            transactions[i].category = category
+            continue
 
-            # Otherwise prompt the user for what the category should be
-            if do_prompt:
-                transactions[i].category = _prompt_user_for_category(hinter, table, transaction.description, description_suffix=f"({i} / {len(transactions)})")
+        # Otherwise prompt the user for what the category should be
+        if do_prompt:
+            transactions[i].category = _prompt_user_for_category(table, hinter, transaction.description, description_suffix=f"({i} / {len(transactions)})")
 
     return transactions
 
@@ -104,7 +111,7 @@ def _download(account: Account) -> Path:
 
     print(f"Downloading statement to {path}")
     data = account.download(days=365)
-    with path.open("wb") as f:
+    with path.open("wb", encoding="utf-8") as f:
         f.write(data.getvalue().encode())
     return path
 

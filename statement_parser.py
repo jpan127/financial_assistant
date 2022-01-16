@@ -1,78 +1,36 @@
 import csv
-from datetime import timezone
 from typing import Any, List, Mapping
 from pathlib import Path
 
 import click
-from ofxtools.Parser import OFXTree
 
+import parser_utils as utils
 from category import Category
 from category_lookup_table import STRING_CATEGORY_MAP
-from transaction import Transaction
-
-
-# These are chase payment transaction descriptions and shouldn't be relevant
-IGNORED_TRANSACTION_KEYS = (
-    "AUTO PAYMENT",
-    "AUTOMATIC PAYMENT - THANK",
-    "AUTOMATIC PAYMENT - THANK",
-    "AUTOPAY PAYMENT - THANK YOU",
-    "AUTOPAY PAYMENT THANK YOU",
-    "MOBILE PAYMENT THANK YOU",
-    "MOBILE PAYMENT - THANK YOU",
-    "Payment Thank You - Web",
-    "Payment Thank You-Mobile",
-)
+from transaction import Transaction, Transactions
+from parser_utils import IGNORED_TRANSACTION_KEYS
 
 
 class SchemaMismatchError(Exception):
     """The schema of the file was unexpected."""
 
 
-def _parse_ofx(path: Path) -> List[Transaction]:
+def _parse_ofx(path: Path, *, year: str, name: str) -> List[Transaction]:
     """
     Parses an OFX file and converts it to a list of transactions.
 
-    Params:
+    Args:
         path: The path to the OFX file.
+        year: The expected year of the transactions, also filtered by year.
+        name: The name of the institution the transactions came from.
 
     Returns:
         The converted list of transactions.
     """
-
-    def parse_id(transaction: Any) -> str:
-        """Prefer the REFNUM attribute, if it exists, otherwise the FITID."""
-        return transaction.refnum or transaction.fitid
-
-    # Parse in binary mode (required by library)
-    parser = OFXTree()
-    with path.open("rb") as f:
-        parser.parse(f)
-
-    transactions: List[Transaction] = []
-    ofx = parser.convert()
-    statements = ofx.statements
-    for statement in statements:
-        for transaction in statement.transactions:
-            # Skip blacklisted transactions
-            # Some of these strings have leading whitespace
-            if transaction.name.strip() in IGNORED_TRANSACTION_KEYS:
-                continue
-            dtime = transaction.dtposted.replace(tzinfo=timezone.utc).astimezone(tz=None)
-            transactions.append(
-                Transaction(
-                    date=dtime.date().isoformat(),
-                    description=transaction.name,
-                    category=Category.Unknown,
-                    amount=float(transaction.trnamt),
-                    id=parse_id(transaction),
-                )
-            )
-
-    return transactions
+    return [t for t in utils.parse_ofx(path, category=Category.Unknown, tags=[year, name]) if t.date.split("-")[0] == year]
 
 
-def _parse_csv(path: Path) -> List[Transaction]:
+def _parse_csv(path: Path, *, year: str, name: str) -> List[Transaction]:
     """
     Parses a CSV file and converts it to a list of transactions.
 
@@ -113,6 +71,7 @@ def _parse_csv(path: Path) -> List[Transaction]:
                     category=STRING_CATEGORY_MAP[transaction["Category"]],
                     amount=parse_amount(transaction["Amount"]),
                     id=parse_id(transaction),
+                    tags=[year, name],
                 )
                 for transaction in reader
                 if transaction["Description"] not in IGNORED_TRANSACTION_KEYS
@@ -121,31 +80,26 @@ def _parse_csv(path: Path) -> List[Transaction]:
             raise SchemaMismatchError(f"CSV headers mismatch: {reader.fieldnames}") from e
 
 
-def parse(path: Path) -> List[Transaction]:
+def parse(path: Path) -> Transactions:
     """
     Parses a CSV/OFX file and converts it to a list of transactions.
 
     Params:
-        path: The path to the CSV/OFX file.
+        path: The path to the CSV/OFX file. Expected to be in <YEAR>_<NAME>.<EXT> format.
 
     Returns:
         The converted list of transactions.
     """
-    match path.suffix.lower():
-        case ".csv":
-            return _parse_csv(path)
-        case (".ofx" | ".qfx"):
-            return _parse_ofx(path)
-    raise RuntimeError(f"Only CSV/OFX files are supported, not {path.suffix}")
+    return utils.parse(path, _parse_csv, _parse_ofx)
 
 
 @click.command()
-@click.argument("path", type=click.Path(exists=True))
-def cli(path: str) -> None:
+@click.argument("path", type=click.Path(exists=True, path_type=Path))
+def cli(path: Path) -> None:
     """CLI to manually test the functions."""
     import pprint
 
-    pprint.pprint(parse(Path(path)))
+    pprint.pprint(parse(path))
 
 
 if __name__ == "__main__":

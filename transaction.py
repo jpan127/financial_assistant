@@ -1,6 +1,6 @@
 import dataclasses
 import hashlib
-from typing import List
+from typing import Any, List, Optional, Sequence
 
 from category import Category
 
@@ -28,16 +28,22 @@ class Transaction:
 Transactions = List[Transaction]
 
 
-def hash_transactions(transactions: Transactions) -> str:
+def hash_transactions(
+    transactions: Transactions,
+    extra_inputs: Optional[Sequence[Any]] = None,
+) -> str:
     """Hashes a list of transactions.
 
     Args:
-        transctions:
-            The transactions to hash.
+        transactions: The transactions to hash.
+        extra_inputs: Additional string-convertible objects to hash.
     Returns:
         An MD5 hex-string hash.
     """
     hasher = hashlib.md5()
     for transaction in transactions:
         hasher.update(str(transaction).encode("utf-8"))
+    if extra_inputs:
+        for extra_input in extra_inputs:
+            hasher.update(str(extra_input).encode("utf-8"))
     return hasher.hexdigest()

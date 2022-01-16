@@ -91,7 +91,7 @@ class CategoryHinter:
         self._config_path = config_path
 
         if not config_path.exists():
-            with config_path.open("w"):
+            with config_path.open("w", encoding="utf-8"):
                 pass
 
         self._config = yaml.load(config_path)
@@ -197,7 +197,7 @@ class CategoryLookupTable:
         self._config_path = config_path
 
         if not config_path.exists():
-            with config_path.open("w"):
+            with config_path.open("w", encoding="utf-8"):
                 pass
 
         self._table: CategoryMap = yaml.load(config_path)
@@ -208,7 +208,7 @@ class CategoryLookupTable:
         """Enter context."""
         return self
 
-    def __exit__(self, *_args) -> None:
+    def __exit__(self, *_) -> None:
         """Exit context; flush contents to file."""
         self.flush()
 
